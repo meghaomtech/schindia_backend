@@ -14,6 +14,15 @@ export interface OpeningTime {
 
 export type OpeningTimes = Record<DayKey, OpeningTime>;
 
+export interface BankDetails {
+  accountName: string;
+  bankName: string;
+  accountNumber: string;
+  sortCode: string;
+  ifscCode?: string;
+  upiId?: string;
+}
+
 export interface Centre {
   id: ID;
   systemId: string;
@@ -28,6 +37,7 @@ export interface Centre {
   rooms: Room[];
   closureDates: string[];
   openingTimes: OpeningTimes;
+  bankDetails?: BankDetails;
 }
 
 export interface Room {
@@ -37,6 +47,7 @@ export interface Room {
 
 export interface Session {
   id: ID;
+  centreId: ID;
   name: string;
   childLimit: number;
   ageFrom: number;
@@ -126,6 +137,30 @@ export interface BillPayerBalance {
   lastNote: string;
 }
 
+export type PaymentTerm = 'Monthly' | 'Quarterly' | 'Half-yearly' | 'Annually' | 'One-time';
+export type InvoiceStatus = 'Draft' | 'Sent' | 'Paid' | 'Overdue';
+export type InvoiceDeliveryChannel = 'email' | 'sms';
+
+export interface InvoiceItem {
+  id: ID;
+  description: string;
+  amount: number;
+}
+
+export interface Invoice {
+  id: ID;
+  number: string;
+  childId: ID;
+  invoiceDate: string;
+  dueDate: string;
+  paymentTerm: PaymentTerm;
+  items: InvoiceItem[];
+  taxRate: number;
+  status: InvoiceStatus;
+  sentAt?: string;
+  sentTo?: { channel: InvoiceDeliveryChannel; target: string }[];
+}
+
 export type JourneyType = 'Milestone' | 'Observation';
 
 export interface JourneyEntry {
@@ -143,6 +178,32 @@ export interface ChildNote {
   text: string;
   date: string;
   staffName: string;
+}
+
+export interface PermissionFlags {
+  edit: boolean;
+  visible: boolean;
+}
+
+export interface RolePermission {
+  key: string;
+  edit: boolean;
+  visible: boolean;
+}
+
+export interface RoleMember {
+  id: ID;
+  name: string;
+  email: string;
+}
+
+export interface Role {
+  id: ID;
+  centreId: ID;
+  name: string;
+  description: string;
+  permissions: RolePermission[];
+  members: RoleMember[];
 }
 
 export interface ValidationError {

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Field, Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
+import { CheckIcon, CloseIcon } from '@/components/ui/icons';
 import { useStore } from '@/store/store';
 import { validateCentreDetails } from '@/lib/validation';
 import { uid } from '@/lib/ids';
@@ -17,6 +18,12 @@ interface FormState {
   email: string;
   managerName: string;
   rooms: Room[];
+  bankAccountName: string;
+  bankName: string;
+  bankAccountNumber: string;
+  bankSortCode: string;
+  bankIfscCode: string;
+  bankUpiId: string;
 }
 
 function fromCentre(c: Centre): FormState {
@@ -30,6 +37,12 @@ function fromCentre(c: Centre): FormState {
     email: c.email,
     managerName: c.managerName,
     rooms: c.rooms,
+    bankAccountName: c.bankDetails?.accountName ?? '',
+    bankName: c.bankDetails?.bankName ?? '',
+    bankAccountNumber: c.bankDetails?.accountNumber ?? '',
+    bankSortCode: c.bankDetails?.sortCode ?? '',
+    bankIfscCode: c.bankDetails?.ifscCode ?? '',
+    bankUpiId: c.bankDetails?.upiId ?? '',
   };
 }
 
@@ -55,6 +68,7 @@ export function CentreDetailsTab({ centre }: { centre: Centre }) {
     const errs = validateCentreDetails(form);
     setErrors(errs);
     if (errs.length > 0) return;
+    const hasBankDetails = form.bankAccountName.trim() || form.bankAccountNumber.trim();
     updateCentre(centre.id, {
       name: form.name.trim(),
       streetAddress: form.streetAddress.trim(),
@@ -65,6 +79,16 @@ export function CentreDetailsTab({ centre }: { centre: Centre }) {
       email: form.email.trim(),
       managerName: form.managerName.trim(),
       rooms: form.rooms.filter((r) => r.name.trim().length > 0),
+      bankDetails: hasBankDetails
+        ? {
+            accountName: form.bankAccountName.trim(),
+            bankName: form.bankName.trim(),
+            accountNumber: form.bankAccountNumber.trim(),
+            sortCode: form.bankSortCode.trim(),
+            ifscCode: form.bankIfscCode.trim() || undefined,
+            upiId: form.bankUpiId.trim() || undefined,
+          }
+        : undefined,
     });
     setSavedAt(Date.now());
   }
@@ -161,6 +185,55 @@ export function CentreDetailsTab({ centre }: { centre: Centre }) {
         </Field>
       </div>
 
+      <div className="text-xs uppercase tracking-wide text-text-muted pt-2">
+        Bank details
+        <span className="normal-case text-text-dim ml-1">(shown on invoices)</span>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Account holder name">
+          <Input
+            value={form.bankAccountName}
+            onChange={(e) => setForm({ ...form, bankAccountName: e.target.value })}
+            placeholder="e.g. Shichida India Pvt Ltd"
+          />
+        </Field>
+        <Field label="Bank name">
+          <Input
+            value={form.bankName}
+            onChange={(e) => setForm({ ...form, bankName: e.target.value })}
+            placeholder="e.g. HDFC Bank"
+          />
+        </Field>
+        <Field label="Account number">
+          <Input
+            value={form.bankAccountNumber}
+            onChange={(e) => setForm({ ...form, bankAccountNumber: e.target.value })}
+            placeholder="e.g. 1234567890"
+          />
+        </Field>
+        <Field label="Sort code / Branch code">
+          <Input
+            value={form.bankSortCode}
+            onChange={(e) => setForm({ ...form, bankSortCode: e.target.value })}
+            placeholder="e.g. 12-34-56"
+          />
+        </Field>
+        <Field label="IFSC code" hint="For Indian bank transfers">
+          <Input
+            value={form.bankIfscCode}
+            onChange={(e) => setForm({ ...form, bankIfscCode: e.target.value })}
+            placeholder="e.g. HDFC0001234"
+          />
+        </Field>
+        <Field label="UPI ID" hint="Optional — for UPI payments">
+          <Input
+            value={form.bankUpiId}
+            onChange={(e) => setForm({ ...form, bankUpiId: e.target.value })}
+            placeholder="e.g. centre@upi"
+          />
+        </Field>
+      </div>
+
       <div className="pt-2">
         <div className="text-xs uppercase tracking-wide text-text-muted mb-2">Rooms</div>
         <div className="space-y-2">
@@ -179,7 +252,7 @@ export function CentreDetailsTab({ centre }: { centre: Centre }) {
                 aria-label={`Remove room ${r.name || 'unnamed'}`}
                 onClick={() => removeRoom(r.id)}
               >
-                ✕
+                <CloseIcon width={16} height={16} />
               </Button>
             </div>
           ))}
@@ -194,7 +267,9 @@ export function CentreDetailsTab({ centre }: { centre: Centre }) {
           Save changes
         </Button>
         {savedAt && (
-          <span className="text-sm text-olive">✓ Saved</span>
+          <span className="text-sm text-olive flex items-center gap-1">
+            <CheckIcon width={14} height={14} /> Saved
+          </span>
         )}
       </div>
     </div>

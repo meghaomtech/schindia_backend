@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Field, Input, Select, Textarea } from '@/components/ui/Input';
@@ -7,28 +7,21 @@ import { CloseIcon } from '@/components/ui/icons';
 import { useStore } from '@/store/store';
 import { uid } from '@/lib/ids';
 import {
-  DAY_LABELS,
+  addDays,
   dayKeyForDate,
   timeToMinutes,
   toISODate,
 } from '@/lib/dates';
-import {
-  hasSlotOverlap,
-  progressForWeek,
-} from '@/lib/recurrence';
-import type {
-  BookingType,
-  Centre,
-  Room,
-  SessionSlot,
-} from '@/lib/types';
+import { hasSlotOverlap } from '@/lib/recurrence';
+import type { BookingType, Centre, SessionSlot } from '@/lib/types';
 
-export interface SlotModalCtx {
+const TOTAL_SESSIONS = 15;
+const WEEKS_PER_MONTH = 4;
+
+interface Props {
+  open: boolean;
   centre: Centre;
-  room: Room;
-  date: Date;
-  startTime: string;
-  existingSlot: SessionSlot | null;
+  onClose: () => void;
 }
 
 function durationLabel(h: number, m: number): string {
@@ -37,27 +30,32 @@ function durationLabel(h: number, m: number): string {
   return `${m}min`;
 }
 
-export function SlotModal({
-  ctx,
-  allSlots,
-  onClose,
-}: {
-  ctx: SlotModalCtx | null;
-  allSlots: SessionSlot[];
-  onClose: () => void;
-}) {
+function progressLabel(index: number, baseMonth: number, baseWeek: number): { month: number; week: number } {
+  const totalWeeks = (baseWeek - 1) + index;
+  const month = baseMonth + Math.floor(totalWeeks / WEEKS_PER_MONTH);
+  const week = (totalWeeks % WEEKS_PER_MONTH) + 1;
+  return { month, week };
+}
+
+export function GenerateTimetableModal({ open, centre, onClose }: Props) {
   const {
     sessions,
+    slots: allSlots,
     children: kids,
     roles,
     addSlot,
-    updateSlot,
-    deleteSlot,
   } = useStore();
 
+  const centreSessions = useMemo(
+    () => sessions.filter((s) => s.centreId === centre.id),
+    [sessions, centre.id]
+  );
+
   const [sessionId, setSessionId] = useState('');
+  const [roomId, setRoomId] = useState(centre.rooms[0]?.id ?? '');
   const [bookingType, setBookingType] = useState<BookingType>('recurring');
   const [startTime, setStartTime] = useState('09:00');
+  const [startDate, setStartDate] = useState(toISODate(new Date()));
   const [endDate, setEndDate] = useState('');
   const [startingMonth, setStartingMonth] = useState(1);
   const [startingWeek, setStartingWeek] = useState(1);
@@ -67,41 +65,6 @@ export function SlotModal({
   const [pendingTeacherId, setPendingTeacherId] = useState('');
   const [pendingChildId, setPendingChildId] = useState('');
   const [overlapErr, setOverlapErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!ctx) return;
-    if (ctx.existingSlot) {
-      const s = ctx.existingSlot;
-      setSessionId(s.sessionId);
-      setBookingType(s.bookingType);
-      setStartTime(s.startTime);
-      setEndDate(s.endDate ?? '');
-      setStartingMonth(s.startingMonth);
-      setStartingWeek(s.startingWeek);
-      setTeacherIds(s.teacherIds);
-      setChildIds(s.childIds);
-      setNotes(s.notes ?? '');
-    } else {
-      const firstForCentre = sessions.find((s) => s.centreId === ctx.centre.id);
-      setSessionId(firstForCentre?.id ?? '');
-      setBookingType('recurring');
-      setStartTime(ctx.startTime);
-      setEndDate('');
-      setStartingMonth(1);
-      setStartingWeek(1);
-      setTeacherIds([]);
-      setChildIds([]);
-      setNotes('');
-    }
-    setPendingTeacherId('');
-    setPendingChildId('');
-    setOverlapErr(null);
-  }, [ctx?.existingSlot?.id, ctx?.date.toString(), ctx?.startTime]);
-
-  const centreSessions = useMemo(
-    () => (ctx ? sessions.filter((s) => s.centreId === ctx.centre.id) : sessions),
-    [sessions, ctx]
-  );
 
   const session = useMemo(
     () => sessions.find((s) => s.id === sessionId) ?? null,
@@ -116,51 +79,23 @@ export function SlotModal({
 
   const availableTeachers = useMemo(
     () => {
-      // Get teachers from "Teacher" role members for this centre
-      const centreTeacherRole = ctx
-        ? roles.find((r) => r.centreId === ctx.centre.id && r.name === 'Teacher')
-        : null;
+      const centreTeacherRole = roles.find(
+        (r) => r.centreId === centre.id && r.name === 'Teacher'
+      );
       const roleMembers = centreTeacherRole?.members ?? [];
       return roleMembers
         .map((m) => ({ id: m.id, name: m.name }))
         .filter((t) => !teacherIds.includes(t.id));
     },
-    [roles, teacherIds, ctx]
+    [roles, teacherIds, centre.id]
   );
 
   const availableChildren = useMemo(
-    () =>
-      kids.filter(
-        (c) => !childIds.includes(c.id) && (!ctx || c.centreId === ctx.centre.id)
-      ),
-    [kids, childIds, ctx]
+    () => kids.filter((c) => !childIds.includes(c.id) && c.centreId === centre.id),
+    [kids, childIds, centre.id]
   );
 
-  if (!ctx) return null;
-
   const atCapacity = !!session && childIds.length >= session.childLimit;
-
-  // calculate auto-progress for recurring view
-  const previewSlot: SessionSlot | null =
-    session && bookingType === 'recurring'
-      ? {
-          id: 'preview',
-          centreId: ctx.centre.id,
-          roomId: ctx.room.id,
-          sessionId: session.id,
-          day: dayKeyForDate(ctx.date),
-          startTime,
-          bookingType,
-          startDate: toISODate(ctx.date),
-          endDate: endDate || undefined,
-          startingMonth,
-          startingWeek,
-          teacherIds,
-          childIds,
-          notes,
-        }
-      : null;
-  const autoProgress = previewSlot ? progressForWeek(previewSlot, ctx.date) : null;
 
   function addTeacher() {
     if (!pendingTeacherId) return;
@@ -181,54 +116,82 @@ export function SlotModal({
     setChildIds((c) => c.filter((x) => x !== id));
   }
 
-  function save() {
-    if (!ctx) return;
-    if (!session) return;
+  function handleCreate() {
+    if (!session || !roomId || !startDate) return;
+    setOverlapErr(null);
 
-    const startDate = toISODate(ctx.date);
-    const day = dayKeyForDate(ctx.date);
     const dur = session.durationHours * 60 + session.durationMinutes;
 
-    const overlap = hasSlotOverlap({
-      centre: ctx.centre,
-      roomId: ctx.room.id,
-      date: ctx.date,
-      startMinutes: timeToMinutes(startTime),
-      durationMinutes: dur,
-      sessionsById,
-      existingSlots: allSlots,
-      excludeSlotId: ctx.existingSlot?.id ?? null,
-    });
-    if (overlap) {
-      setOverlapErr('This time conflicts with another session in this room. Choose a different time.');
-      return;
-    }
+    if (bookingType === 'recurring') {
+      const base = new Date(startDate + 'T00:00:00');
 
-    if (ctx.existingSlot) {
-      updateSlot(ctx.existingSlot.id, {
-        sessionId,
-        bookingType,
-        startTime,
-        startDate,
-        endDate: bookingType === 'recurring' ? endDate || undefined : undefined,
-        startingMonth,
-        startingWeek,
-        day,
-        teacherIds,
-        childIds,
-        notes,
+      const overlap = hasSlotOverlap({
+        centre,
+        roomId,
+        date: base,
+        startMinutes: timeToMinutes(startTime),
+        durationMinutes: dur,
+        sessionsById,
+        existingSlots: allSlots,
+        excludeSlotId: null,
       });
+      if (overlap) {
+        setOverlapErr('The first session time conflicts with another session in this room.');
+        return;
+      }
+
+      for (let i = 0; i < TOTAL_SESSIONS; i++) {
+        const date = addDays(base, i * 7);
+        const { month, week } = progressLabel(i, startingMonth, startingWeek);
+        const day = dayKeyForDate(date);
+
+        const slot: SessionSlot = {
+          id: uid('slot'),
+          centreId: centre.id,
+          roomId,
+          sessionId: session.id,
+          day,
+          startTime,
+          bookingType: 'recurring',
+          startDate: toISODate(date),
+          endDate: toISODate(date),
+          startingMonth: month,
+          startingWeek: week,
+          teacherIds,
+          childIds,
+          notes: notes || `M${month}W${week}`,
+        };
+        addSlot(slot);
+      }
     } else {
+      const base = new Date(startDate + 'T00:00:00');
+      const day = dayKeyForDate(base);
+
+      const overlap = hasSlotOverlap({
+        centre,
+        roomId,
+        date: base,
+        startMinutes: timeToMinutes(startTime),
+        durationMinutes: dur,
+        sessionsById,
+        existingSlots: allSlots,
+        excludeSlotId: null,
+      });
+      if (overlap) {
+        setOverlapErr('This time conflicts with another session in this room.');
+        return;
+      }
+
       const slot: SessionSlot = {
         id: uid('slot'),
-        centreId: ctx.centre.id,
-        roomId: ctx.room.id,
-        sessionId,
+        centreId: centre.id,
+        roomId,
+        sessionId: session.id,
         day,
         startTime,
-        bookingType,
+        bookingType: 'one-off',
         startDate,
-        endDate: bookingType === 'recurring' ? endDate || undefined : undefined,
+        endDate: undefined,
         startingMonth,
         startingWeek,
         teacherIds,
@@ -237,51 +200,54 @@ export function SlotModal({
       };
       addSlot(slot);
     }
+
+    handleClose();
+  }
+
+  function handleClose() {
+    setSessionId('');
+    setRoomId(centre.rooms[0]?.id ?? '');
+    setBookingType('recurring');
+    setStartTime('09:00');
+    setStartDate(toISODate(new Date()));
+    setEndDate('');
+    setStartingMonth(1);
+    setStartingWeek(1);
+    setTeacherIds([]);
+    setChildIds([]);
+    setNotes('');
+    setPendingTeacherId('');
+    setPendingChildId('');
+    setOverlapErr(null);
     onClose();
   }
 
-  function remove() {
-    if (!ctx?.existingSlot) return;
-    if (confirm('Remove this slot?')) {
-      deleteSlot(ctx.existingSlot.id);
-      onClose();
-    }
-  }
-
-  const dayLabel = DAY_LABELS[dayKeyForDate(ctx.date)];
-  const title = ctx.existingSlot
-    ? `Edit — ${dayLabel} ${startTime}`
-    : `Add session — ${startTime}`;
+  const room = centre.rooms.find((r) => r.id === roomId) ?? null;
 
   return (
     <Modal
-      open={!!ctx}
-      onClose={onClose}
+      open={open}
+      onClose={handleClose}
       size="md"
-      title={title}
+      title={`Create timetable — ${startTime}`}
       footer={
-        <div className="flex items-center justify-between w-full">
-          {ctx.existingSlot ? (
-            <Button variant="danger" onClick={remove}>
-              Remove slot
-            </Button>
-          ) : (
-            <span />
-          )}
-          <div className="flex items-center gap-2">
-            <Button onClick={onClose}>Cancel</Button>
-            <Button variant="primary" onClick={save} disabled={!session}>
-              {ctx.existingSlot ? 'Save changes' : 'Add to calendar'}
-            </Button>
-          </div>
+        <div className="flex items-center justify-end gap-2 w-full">
+          <Button onClick={handleClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            onClick={handleCreate}
+            disabled={!session || !roomId || !startDate}
+          >
+            {bookingType === 'recurring' ? 'Add to calendar' : 'Add to calendar'}
+          </Button>
         </div>
       }
     >
       <div className="space-y-4">
         <div className="text-sm text-text-muted flex items-center gap-2">
-          <Badge tone="beige">{ctx.centre.name}</Badge>
-          <Badge tone="olive">{ctx.room.name}</Badge>
-          <Badge tone="default">{toISODate(ctx.date)}</Badge>
+          <Badge tone="beige">{centre.name}</Badge>
+          {room && <Badge tone="olive">{room.name}</Badge>}
+          <Badge tone="default">{startDate}</Badge>
         </div>
 
         {/* Session selector */}
@@ -345,10 +311,14 @@ export function SlotModal({
           </div>
         </div>
 
-        {/* Start / end date — end disabled when one-off */}
+        {/* Start / end date */}
         <div className="grid grid-cols-2 gap-3">
           <Field label="Start date">
-            <Input value={toISODate(ctx.date)} readOnly />
+            <Input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+            />
           </Field>
           <Field
             label="End date"
@@ -367,7 +337,7 @@ export function SlotModal({
           </Field>
         </div>
 
-        {/* Teachers — pills + dropdown + add */}
+        {/* Teachers */}
         <div>
           <div className="label mb-1">Teachers</div>
           <div className="flex flex-wrap gap-1.5 mb-2">
@@ -375,9 +345,9 @@ export function SlotModal({
               <span className="text-xs text-text-dim italic">No teachers added.</span>
             )}
             {teacherIds.map((id) => {
-              const centreTeacherRole = ctx
-                ? roles.find((r) => r.centreId === ctx.centre.id && r.name === 'Teacher')
-                : null;
+              const centreTeacherRole = roles.find(
+                (r) => r.centreId === centre.id && r.name === 'Teacher'
+              );
               const t = centreTeacherRole?.members.find((x) => x.id === id);
               if (!t) return null;
               return (
@@ -415,7 +385,7 @@ export function SlotModal({
           </div>
         </div>
 
-        {/* Children — capacity bar + pills + dropdown + add */}
+        {/* Children */}
         {session && (
           <div>
             <div className="flex items-center justify-between mb-1">
@@ -524,14 +494,11 @@ export function SlotModal({
             <div className="text-xs text-text-dim mt-1">
               Tracks where this group is in the course for this slot
             </div>
-            {autoProgress && (
-              <div className="mt-2">
-                <Badge tone="olive">
-                  Progress auto-advances weekly. This week: M{autoProgress.month} W
-                  {autoProgress.week}
-                </Badge>
-              </div>
-            )}
+            <div className="mt-2">
+              <Badge tone="olive">
+                Progress auto-advances weekly. This week: M{startingMonth} W{startingWeek}
+              </Badge>
+            </div>
           </div>
         )}
 

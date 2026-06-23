@@ -7,8 +7,12 @@ import type {
   ChildEnrolment,
   ChildNote,
   ID,
+  Invoice,
   JourneyEntry,
   Purchase,
+  Role,
+  RoleMember,
+  RolePermission,
   Session,
   SessionSlot,
   Teacher,
@@ -19,6 +23,7 @@ import {
   seedChildren,
   seedEnrolments,
   seedPurchases,
+  seedRoles,
   seedSessions,
   seedSlots,
   seedTeachers,
@@ -36,6 +41,8 @@ export interface StoreState {
   enrolments: ChildEnrolment[];
   purchases: Purchase[];
   billPayerBalances: BillPayerBalance[];
+  invoices: Invoice[];
+  roles: Role[];
 }
 
 export interface StoreActions {
@@ -61,6 +68,17 @@ export interface StoreActions {
   removeEnrolment: (id: ID) => void;
   // Purchases
   addPurchase: (p: Purchase) => void;
+  // Invoices
+  addInvoice: (i: Invoice) => void;
+  updateInvoice: (id: ID, patch: Partial<Invoice>) => void;
+  deleteInvoice: (id: ID) => void;
+  // Roles
+  addRole: (r: Role) => void;
+  updateRole: (id: ID, patch: Partial<Role>) => void;
+  deleteRole: (id: ID) => void;
+  updateRolePermission: (roleId: ID, permissionKey: string, patch: Partial<RolePermission>) => void;
+  addRoleMember: (roleId: ID, member: RoleMember) => void;
+  removeRoleMember: (roleId: ID, memberId: ID) => void;
 }
 
 type StoreCtx = StoreState & StoreActions;
@@ -104,6 +122,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     enrolments: seedEnrolments,
     purchases: seedPurchases,
     billPayerBalances: seedBillPayerBalances,
+    invoices: [],
+    roles: seedRoles,
   }));
 
   const addCentre = useCallback(
@@ -221,6 +241,84 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  const addInvoice = useCallback(
+    (i: Invoice) =>
+      setState((s) => ({ ...s, invoices: [i, ...s.invoices] })),
+    []
+  );
+  const updateInvoice = useCallback(
+    (id: ID, patch: Partial<Invoice>) =>
+      setState((s) => ({
+        ...s,
+        invoices: s.invoices.map((x) => (x.id === id ? { ...x, ...patch } : x)),
+      })),
+    []
+  );
+  const deleteInvoice = useCallback(
+    (id: ID) =>
+      setState((s) => ({
+        ...s,
+        invoices: s.invoices.filter((x) => x.id !== id),
+      })),
+    []
+  );
+
+  const addRole = useCallback(
+    (r: Role) => setState((s) => ({ ...s, roles: [...s.roles, r] })),
+    []
+  );
+  const updateRole = useCallback(
+    (id: ID, patch: Partial<Role>) =>
+      setState((s) => ({
+        ...s,
+        roles: s.roles.map((r) => (r.id === id ? { ...r, ...patch } : r)),
+      })),
+    []
+  );
+  const deleteRole = useCallback(
+    (id: ID) => setState((s) => ({ ...s, roles: s.roles.filter((r) => r.id !== id) })),
+    []
+  );
+  const updateRolePermission = useCallback(
+    (roleId: ID, permissionKey: string, patch: Partial<RolePermission>) =>
+      setState((s) => ({
+        ...s,
+        roles: s.roles.map((r) =>
+          r.id === roleId
+            ? {
+                ...r,
+                permissions: r.permissions.map((p) =>
+                  p.key === permissionKey ? { ...p, ...patch } : p
+                ),
+              }
+            : r
+        ),
+      })),
+    []
+  );
+  const addRoleMember = useCallback(
+    (roleId: ID, member: RoleMember) =>
+      setState((s) => ({
+        ...s,
+        roles: s.roles.map((r) =>
+          r.id === roleId ? { ...r, members: [...r.members, member] } : r
+        ),
+      })),
+    []
+  );
+  const removeRoleMember = useCallback(
+    (roleId: ID, memberId: ID) =>
+      setState((s) => ({
+        ...s,
+        roles: s.roles.map((r) =>
+          r.id === roleId
+            ? { ...r, members: r.members.filter((m) => m.id !== memberId) }
+            : r
+        ),
+      })),
+    []
+  );
+
   const value = useMemo<StoreCtx>(
     () => ({
       ...state,
@@ -239,6 +337,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       upsertEnrolment,
       removeEnrolment,
       addPurchase,
+      addInvoice,
+      updateInvoice,
+      deleteInvoice,
+      addRole,
+      updateRole,
+      deleteRole,
+      updateRolePermission,
+      addRoleMember,
+      removeRoleMember,
     }),
     [
       state,
@@ -257,6 +364,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       upsertEnrolment,
       removeEnrolment,
       addPurchase,
+      addInvoice,
+      updateInvoice,
+      deleteInvoice,
+      addRole,
+      updateRole,
+      deleteRole,
+      updateRolePermission,
+      addRoleMember,
+      removeRoleMember,
     ]
   );
 

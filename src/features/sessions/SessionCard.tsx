@@ -1,3 +1,4 @@
+import { CalendarIcon, ClockIcon, UsersIcon } from '@/components/ui/icons';
 import { initialsOf } from '@/lib/colors';
 import type { Session } from '@/lib/types';
 
@@ -40,17 +41,17 @@ export function SessionCard({
       </div>
       <ul className="mt-3 space-y-1 text-xs text-text-muted">
         <li className="flex items-center gap-2">
-          <span aria-hidden="true">👥</span>
+          <UsersIcon width={14} height={14} className="shrink-0" />
           <span>Max {session.childLimit} children</span>
         </li>
         <li className="flex items-center gap-2">
-          <span aria-hidden="true">📅</span>
+          <CalendarIcon width={14} height={14} className="shrink-0" />
           <span>
             {session.ageFrom}–{session.ageTo} {session.ageUnit}
           </span>
         </li>
         <li className="flex items-center gap-2">
-          <span aria-hidden="true">⏱</span>
+          <ClockIcon width={14} height={14} className="shrink-0" />
           <span>{durationLabel(session)}</span>
         </li>
       </ul>

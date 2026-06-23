@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
+import { CloseIcon } from './icons';
 
 export interface ModalProps {
   open: boolean;
@@ -60,7 +61,7 @@ export function Modal({
               aria-label="Close"
               type="button"
             >
-              ✕
+              <CloseIcon />
             </button>
           </header>
         )}

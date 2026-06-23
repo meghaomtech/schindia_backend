@@ -3,6 +3,15 @@ import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import {
+  CheckIcon,
+  CloseIcon,
+  MailIcon,
+  MapPinIcon,
+  PhoneIcon,
+  ReceiptIcon,
+  UserIcon,
+} from '@/components/ui/icons';
 import { useStore } from '@/store/store';
 import { nextCentreSystemId, uid } from '@/lib/ids';
 import { validateCentreDetails } from '@/lib/validation';
@@ -28,6 +37,12 @@ interface FormState {
   email: string;
   managerName: string;
   rooms: Room[];
+  bankAccountName: string;
+  bankName: string;
+  bankAccountNumber: string;
+  bankSortCode: string;
+  bankIfscCode: string;
+  bankUpiId: string;
 }
 
 const emptyForm = (): FormState => ({
@@ -40,6 +55,12 @@ const emptyForm = (): FormState => ({
   email: '',
   managerName: '',
   rooms: [],
+  bankAccountName: '',
+  bankName: '',
+  bankAccountNumber: '',
+  bankSortCode: '',
+  bankIfscCode: '',
+  bankUpiId: '',
 });
 
 export function AddCentreModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -88,6 +109,7 @@ export function AddCentreModal({ open, onClose }: { open: boolean; onClose: () =
   }
 
   function finalize() {
+    const hasBankDetails = form.bankAccountName.trim() || form.bankAccountNumber.trim();
     const c: Centre = {
       id: uid('c'),
       systemId,
@@ -102,6 +124,16 @@ export function AddCentreModal({ open, onClose }: { open: boolean; onClose: () =
       rooms: form.rooms.filter((r) => r.name.trim().length > 0),
       closureDates: [],
       openingTimes: defaultOpeningTimes,
+      bankDetails: hasBankDetails
+        ? {
+            accountName: form.bankAccountName.trim(),
+            bankName: form.bankName.trim(),
+            accountNumber: form.bankAccountNumber.trim(),
+            sortCode: form.bankSortCode.trim(),
+            ifscCode: form.bankIfscCode.trim() || undefined,
+            upiId: form.bankUpiId.trim() || undefined,
+          }
+        : undefined,
     };
     addCentre(c);
     handleClose();
@@ -146,7 +178,7 @@ export function AddCentreModal({ open, onClose }: { open: boolean; onClose: () =
           )}
           {step === 3 && (
             <Button variant="primary" onClick={finalize}>
-              ✓ Create centre
+              <CheckIcon width={16} height={16} className="mr-1" /> Create centre
             </Button>
           )}
         </div>
@@ -232,6 +264,55 @@ export function AddCentreModal({ open, onClose }: { open: boolean; onClose: () =
               />
             </Field>
           </div>
+
+          <div className="text-xs uppercase tracking-wide text-text-muted pt-2">
+            Bank details
+            <span className="normal-case text-text-dim ml-1">(shown on invoices)</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Account holder name">
+              <Input
+                value={form.bankAccountName}
+                onChange={(e) => setForm({ ...form, bankAccountName: e.target.value })}
+                placeholder="e.g. Shichida India Pvt Ltd"
+              />
+            </Field>
+            <Field label="Bank name">
+              <Input
+                value={form.bankName}
+                onChange={(e) => setForm({ ...form, bankName: e.target.value })}
+                placeholder="e.g. HDFC Bank"
+              />
+            </Field>
+            <Field label="Account number">
+              <Input
+                value={form.bankAccountNumber}
+                onChange={(e) => setForm({ ...form, bankAccountNumber: e.target.value })}
+                placeholder="e.g. 1234567890"
+              />
+            </Field>
+            <Field label="Sort code / Branch code">
+              <Input
+                value={form.bankSortCode}
+                onChange={(e) => setForm({ ...form, bankSortCode: e.target.value })}
+                placeholder="e.g. 12-34-56"
+              />
+            </Field>
+            <Field label="IFSC code" hint="For Indian bank transfers">
+              <Input
+                value={form.bankIfscCode}
+                onChange={(e) => setForm({ ...form, bankIfscCode: e.target.value })}
+                placeholder="e.g. HDFC0001234"
+              />
+            </Field>
+            <Field label="UPI ID" hint="Optional — for UPI payments">
+              <Input
+                value={form.bankUpiId}
+                onChange={(e) => setForm({ ...form, bankUpiId: e.target.value })}
+                placeholder="e.g. centre@upi"
+              />
+            </Field>
+          </div>
         </div>
       )}
 
@@ -259,7 +340,7 @@ export function AddCentreModal({ open, onClose }: { open: boolean; onClose: () =
                   aria-label={`Remove room ${r.name || 'unnamed'}`}
                   onClick={() => removeRoom(r.id)}
                 >
-                  ✕
+                  <CloseIcon width={16} height={16} />
                 </Button>
               </div>
             ))}
@@ -284,13 +365,57 @@ export function AddCentreModal({ open, onClose }: { open: boolean; onClose: () =
               </div>
             </div>
             <div className="mt-3 text-sm divide-y divide-border">
-              <div className="py-1.5">📍 {form.streetAddress}, {form.city}, {form.postcode}</div>
-              <div className="py-1.5">📞 {form.phone}</div>
-              <div className="py-1.5">✉️ {form.email}</div>
-              <div className="py-1.5">👤 {form.managerName}</div>
-              {form.vatNumber && <div className="py-1.5">🧾 VAT {form.vatNumber}</div>}
+              <div className="py-1.5 flex items-center gap-2">
+                <MapPinIcon width={14} height={14} className="text-text-muted shrink-0" />
+                <span>{form.streetAddress}, {form.city}, {form.postcode}</span>
+              </div>
+              <div className="py-1.5 flex items-center gap-2">
+                <PhoneIcon width={14} height={14} className="text-text-muted shrink-0" />
+                <span>{form.phone}</span>
+              </div>
+              <div className="py-1.5 flex items-center gap-2">
+                <MailIcon width={14} height={14} className="text-text-muted shrink-0" />
+                <span>{form.email}</span>
+              </div>
+              <div className="py-1.5 flex items-center gap-2">
+                <UserIcon width={14} height={14} className="text-text-muted shrink-0" />
+                <span>{form.managerName}</span>
+              </div>
+              {form.vatNumber && (
+                <div className="py-1.5 flex items-center gap-2">
+                  <ReceiptIcon width={14} height={14} className="text-text-muted shrink-0" />
+                  <span>VAT {form.vatNumber}</span>
+                </div>
+              )}
             </div>
           </div>
+          {(form.bankAccountName || form.bankAccountNumber) && (
+            <div>
+              <div className="text-xs uppercase tracking-wide text-text-muted mb-2">
+                Bank details (printed on invoices)
+              </div>
+              <div className="card p-3 text-sm space-y-1 bg-beige/30">
+                {form.bankAccountName && (
+                  <div><span className="text-text-muted">Account name:</span> {form.bankAccountName}</div>
+                )}
+                {form.bankName && (
+                  <div><span className="text-text-muted">Bank:</span> {form.bankName}</div>
+                )}
+                {form.bankAccountNumber && (
+                  <div><span className="text-text-muted">Account no:</span> {form.bankAccountNumber}</div>
+                )}
+                {form.bankSortCode && (
+                  <div><span className="text-text-muted">Sort/Branch code:</span> {form.bankSortCode}</div>
+                )}
+                {form.bankIfscCode && (
+                  <div><span className="text-text-muted">IFSC:</span> {form.bankIfscCode}</div>
+                )}
+                {form.bankUpiId && (
+                  <div><span className="text-text-muted">UPI:</span> {form.bankUpiId}</div>
+                )}
+              </div>
+            </div>
+          )}
           <div>
             <div className="text-xs uppercase tracking-wide text-text-muted mb-2">
               Rooms ({form.rooms.length})
@@ -333,7 +458,7 @@ function Stepper({ step }: { step: 1 | 2 | 3 }) {
                     : 'bg-bg-elev text-text-dim border border-border',
               ].join(' ')}
             >
-              {done ? '✓' : idx}
+              {done ? <CheckIcon width={12} height={12} /> : idx}
             </span>
             <span
               className={[

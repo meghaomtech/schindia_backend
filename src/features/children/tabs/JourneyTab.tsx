@@ -1,16 +1,21 @@
 import { useState } from 'react';
+import type { ComponentType, SVGProps } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Field, Select, Textarea } from '@/components/ui/Input';
+import { ChartIcon, StarIcon } from '@/components/ui/icons';
 import { useStore } from '@/store/store';
 import { formatLongDate, fromISODate } from '@/lib/dates';
 import { uid } from '@/lib/ids';
 import type { Child, JourneyType } from '@/lib/types';
 
-const ICON_FOR: Record<JourneyType, { bg: string; fg: string; symbol: string }> = {
-  Milestone: { bg: '#ece6f8', fg: '#7c5fbf', symbol: '★' },
-  Observation: { bg: '#dcfce7', fg: '#166534', symbol: '◆' },
+const ICON_FOR: Record<
+  JourneyType,
+  { bg: string; fg: string; Icon: ComponentType<SVGProps<SVGSVGElement>> }
+> = {
+  Milestone: { bg: '#ece6f8', fg: '#7c5fbf', Icon: StarIcon },
+  Observation: { bg: '#dcfce7', fg: '#166534', Icon: ChartIcon },
 };
 
 export function JourneyTab({ child }: { child: Child }) {
@@ -49,15 +54,15 @@ export function JourneyTab({ child }: { child: Child }) {
       ) : (
         <ul className="space-y-3">
           {items.map((e) => {
-            const icon = ICON_FOR[e.type];
+            const { bg, fg, Icon } = ICON_FOR[e.type];
             return (
               <li key={e.id} className="flex items-start gap-3">
                 <span
-                  className="w-9 h-9 rounded-full inline-flex items-center justify-center font-semibold shrink-0"
-                  style={{ background: icon.bg, color: icon.fg }}
+                  className="w-9 h-9 rounded-full inline-flex items-center justify-center shrink-0"
+                  style={{ background: bg, color: fg }}
                   aria-hidden="true"
                 >
-                  {icon.symbol}
+                  <Icon width={16} height={16} />
                 </span>
                 <div className="flex-1 card p-3">
                   <div className="flex items-center justify-between mb-1.5">

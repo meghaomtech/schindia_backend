@@ -7,7 +7,7 @@ describe('SessionEditor', () => {
   it('shows defaults for a new session', () => {
     render(
       <StoreProvider>
-        <SessionEditor session={null} onClose={() => {}} />
+        <SessionEditor session={null} centreId="c1" onClose={() => {}} />
       </StoreProvider>
     );
     expect(screen.getByText('New session')).toBeInTheDocument();
@@ -17,7 +17,7 @@ describe('SessionEditor', () => {
   it('flags a blank name on save', () => {
     render(
       <StoreProvider>
-        <SessionEditor session={null} onClose={() => {}} />
+        <SessionEditor session={null} centreId="c1" onClose={() => {}} />
       </StoreProvider>
     );
     fireEvent.click(screen.getByText('Create session'));

@@ -1,4 +1,5 @@
 import { Badge } from '@/components/ui/Badge';
+import { MapPinIcon, UserIcon } from '@/components/ui/icons';
 import { initialsOf, paletteFor } from '@/lib/colors';
 import type { Centre } from '@/lib/types';
 
@@ -30,12 +31,16 @@ export function CentreCard({
         </div>
       </div>
 
-      <div className="text-sm text-text-muted line-clamp-2">
-        📍 {centre.streetAddress}, {centre.city}, {centre.postcode}
+      <div className="text-sm text-text-muted flex items-start gap-1.5 line-clamp-2">
+        <MapPinIcon className="shrink-0 mt-0.5" width={14} height={14} />
+        <span className="min-w-0">
+          {centre.streetAddress}, {centre.city}, {centre.postcode}
+        </span>
       </div>
 
-      <div className="text-sm text-text-muted">
-        👤 {centre.managerName}
+      <div className="text-sm text-text-muted flex items-center gap-1.5">
+        <UserIcon className="shrink-0" width={14} height={14} />
+        <span>{centre.managerName}</span>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border mt-1">

@@ -3,6 +3,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
+import { ChildrenIcon, WarningIcon } from '@/components/ui/icons';
 import { useStore } from '@/store/store';
 import {
   DAY_LABELS,
@@ -102,20 +103,14 @@ export function ChildBookingsTab({ child }: { child: Child }) {
 
         <Legend />
 
-        <div className="space-y-4">
-          {centre.rooms.map((room) => (
-            <RoomGrid
-              key={room.id}
-              room={room}
-              days={days}
-              centre={centre}
-              child={child}
-              sessions={sessions}
-              slots={sessionsForCentre.filter((s) => s.roomId === room.id)}
-              onSlotClick={(slot, date) => setModalCtx({ slot, date })}
-            />
-          ))}
-        </div>
+        <AllRoomsBookingGrid
+          centre={centre}
+          days={days}
+          child={child}
+          sessions={sessions}
+          slots={sessionsForCentre}
+          onSlotClick={(slot, date) => setModalCtx({ slot, date })}
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -171,37 +166,37 @@ function Legend() {
   return (
     <div className="flex flex-wrap items-center gap-4 text-xs text-text-muted">
       <span className="flex items-center gap-1.5">
-        <span className="w-3 h-3 rounded-sm border-2 border-accent-purple bg-accent-purple-soft" />
-        Age-eligible
+        <span className="w-3 h-3 rounded-sm bg-olive border border-olive" />
+        Enrolled
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="w-3 h-3 rounded-sm border-2 border-accent-purple/50 bg-accent-purple/10" />
+        Eligible
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="w-3 h-3 rounded-sm bg-bg-elev border border-border" style={{ opacity: 0.6 }}>
+          <span className="block w-full h-full bg-text-dim/20 rounded-sm" />
+        </span>
+        Full
       </span>
       <span className="flex items-center gap-1.5">
         <span className="w-3 h-3 rounded-sm bg-bg-elev opacity-30 border border-border" />
         Out of range
       </span>
-      <span className="flex items-center gap-1.5">
-        <span className="w-2 h-2 rounded-full bg-accent-purple" />
-        Eligible
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span className="w-2 h-2 rounded-full bg-olive" />
-        Enrolled
-      </span>
     </div>
   );
 }
 
-function RoomGrid({
-  room,
-  days,
+function AllRoomsBookingGrid({
   centre,
+  days,
   child,
   sessions,
   slots,
   onSlotClick,
 }: {
-  room: Room;
-  days: Date[];
   centre: ReturnType<typeof useStore>['centres'][number];
+  days: Date[];
   child: Child;
   sessions: Session[];
   slots: SessionSlot[];
@@ -235,11 +230,14 @@ function RoomGrid({
     (_, i) => earliest + i * 60
   );
 
+  const roomById = useMemo(() => {
+    const m: Record<string, Room> = {};
+    for (const r of centre.rooms) m[r.id] = r;
+    return m;
+  }, [centre.rooms]);
+
   return (
     <div className="rounded-lg border border-border bg-bg-card overflow-hidden">
-      <div className="px-4 py-2 border-b border-border bg-bg-elev text-sm font-semibold">
-        {room.name}
-      </div>
       <div className="overflow-x-auto">
         <div className="min-w-[700px]">
           <div className="grid" style={{ gridTemplateColumns: '56px repeat(7, 1fr)' }}>
@@ -295,6 +293,16 @@ function RoomGrid({
 
               const daySlots = slots.filter((s) => slotAppearsOnDate(s, d, centre));
 
+              const items = daySlots.map((slot) => {
+                const session = sessions.find((s) => s.id === slot.sessionId);
+                if (!session) return null;
+                const startMin = timeToMinutes(slot.startTime);
+                const dur = session.durationHours * 60 + session.durationMinutes;
+                return { slot, session, startMin, endMin: startMin + dur };
+              }).filter(Boolean) as { slot: SessionSlot; session: Session; startMin: number; endMin: number }[];
+
+              const layout = layoutOverlapping(items);
+
               return (
                 <div
                   key={d.toISOString()}
@@ -314,59 +322,104 @@ function RoomGrid({
                   ))}
 
                   {!closed &&
-                    daySlots.map((slot) => {
-                      const session = sessions.find((s) => s.id === slot.sessionId);
-                      if (!session) return null;
-                      const startMin = timeToMinutes(slot.startTime);
-                      const dur =
-                        session.durationHours * 60 + session.durationMinutes;
+                    items.map((item, idx) => {
+                      const { slot, session, startMin, endMin } = item;
+                      const { col, totalCols } = layout[idx];
                       const top = ((startMin - earliest) / 60) * SLOT_PX;
-                      const height = (dur / 60) * SLOT_PX;
+                      const height = ((endMin - startMin) / 60) * SLOT_PX;
                       const eligible = isAgeEligible(child, d, session);
                       const enrolled = slot.childIds.includes(child.id);
+                      const isFull = slot.childIds.length >= session.childLimit && !enrolled;
+                      const roomName = roomById[slot.roomId]?.name ?? '';
+
+                      const widthPct = 100 / totalCols;
+                      const leftPct = col * widthPct;
+
+                      let bg: string;
+                      let border: string;
+                      let textColor: string;
+                      let opacity = 1;
+
+                      if (enrolled) {
+                        bg = session.colorBg;
+                        border = `3px solid ${session.colorText}`;
+                        textColor = session.colorText;
+                      } else if (!eligible) {
+                        bg = '#f5f5f0';
+                        border = '1px dashed #ccc';
+                        textColor = '#999';
+                        opacity = 0.4;
+                      } else if (isFull) {
+                        bg = '#f0f0f0';
+                        border = '1px solid #ddd';
+                        textColor = '#999';
+                        opacity = 0.7;
+                      } else {
+                        bg = `${session.colorBg}40`;
+                        border = `2px dashed ${session.colorText}80`;
+                        textColor = session.colorText;
+                        opacity = 0.85;
+                      }
 
                       return (
                         <button
                           key={slot.id}
                           type="button"
                           onClick={() => onSlotClick(slot, d)}
-                          className="absolute left-1 right-1 rounded-md p-1.5 text-[11px] shadow-sm overflow-hidden hover:shadow-md text-left flex flex-col"
+                          className={[
+                            'absolute rounded-md p-1.5 text-[11px] overflow-hidden text-left flex flex-col',
+                            enrolled ? 'shadow-md hover:shadow-lg' : 'hover:shadow-md',
+                            isFull && !enrolled ? 'cursor-not-allowed' : 'cursor-pointer',
+                          ].join(' ')}
                           style={{
                             top,
                             height,
-                            background: session.colorBg,
-                            color: session.colorText,
-                            opacity: eligible ? 1 : 0.25,
-                            border: eligible
-                              ? '2px solid #7c5fbf'
-                              : '1px solid rgba(0,0,0,0.1)',
+                            left: `calc(${leftPct}% + 2px)`,
+                            width: `calc(${widthPct}% - 4px)`,
+                            background: bg,
+                            color: textColor,
+                            opacity,
+                            border,
                           }}
                         >
-                          <div className="absolute right-1 top-1 flex items-center gap-1">
-                            {eligible && (
-                              <span
-                                className="w-2 h-2 rounded-full bg-accent-purple"
-                                aria-label="Eligible"
-                              />
-                            )}
-                            {enrolled && (
-                              <span
-                                className="w-2 h-2 rounded-full bg-olive"
-                                aria-label="Enrolled"
-                              />
-                            )}
-                          </div>
-                          <div className="font-semibold leading-tight truncate pr-6">
-                            {session.name}
-                          </div>
-                          {height >= 50 && (
-                            <div className="opacity-90 truncate">
-                              👶 {slot.childIds.length}/{session.childLimit}
+                          {enrolled && (
+                            <div className="absolute right-1 top-1">
+                              <span className="inline-block px-1 py-0.5 rounded text-[9px] font-bold bg-olive text-white leading-none">
+                                ENROLLED
+                              </span>
                             </div>
                           )}
-                          {height >= 70 && (
-                            <div className="opacity-80 truncate">
-                              {slot.startTime}
+                          {isFull && !enrolled && (
+                            <div className="absolute right-1 top-1">
+                              <span className="inline-block px-1 py-0.5 rounded text-[9px] font-bold bg-text-dim/60 text-white leading-none">
+                                FULL
+                              </span>
+                            </div>
+                          )}
+                          <div className="font-semibold leading-tight truncate pr-12">
+                            {session.name}
+                          </div>
+                          {height >= 40 && (
+                            <div className="opacity-80 truncate text-[10px]">
+                              {roomName}
+                            </div>
+                          )}
+                          {height >= 50 && (
+                            <div className="opacity-90 truncate flex items-center gap-1">
+                              <ChildrenIcon width={11} height={11} className="shrink-0" />
+                              <span>
+                                {slot.childIds.length}/{session.childLimit}
+                              </span>
+                            </div>
+                          )}
+                          {height >= 65 && (
+                            <div className="opacity-80 truncate text-[10px]">
+                              {slot.startTime} – {minutesToTime(endMin)}
+                            </div>
+                          )}
+                          {height >= 80 && eligible && !enrolled && !isFull && (
+                            <div className="mt-auto text-[9px] opacity-70 italic">
+                              Tap to enrol
                             </div>
                           )}
                         </button>
@@ -380,6 +433,32 @@ function RoomGrid({
       </div>
     </div>
   );
+}
+
+function layoutOverlapping(items: { startMin: number; endMin: number }[]): { col: number; totalCols: number }[] {
+  if (items.length === 0) return [];
+  const sorted = items.map((it, idx) => ({ ...it, idx })).sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
+  const cols: number[] = new Array(items.length).fill(0);
+  const ends: number[] = [];
+
+  for (const item of sorted) {
+    let placed = false;
+    for (let c = 0; c < ends.length; c++) {
+      if (ends[c] <= item.startMin) {
+        cols[item.idx] = c;
+        ends[c] = item.endMin;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      cols[item.idx] = ends.length;
+      ends.push(item.endMin);
+    }
+  }
+
+  const totalCols = Math.max(1, ends.length);
+  return items.map((_, idx) => ({ col: cols[idx], totalCols }));
 }
 
 function isAgeEligible(child: Child, date: Date, session: Session): boolean {
@@ -563,8 +642,9 @@ function SlotDetailModal({
             </Field>
           </div>
           {atCapacity && !enrolled && (
-            <div className="text-xs text-warn mt-2">
-              ⚠️ This session is at capacity. Enrolling will add to the waitlist.
+            <div className="text-xs text-warn mt-2 flex items-center gap-1.5">
+              <WarningIcon width={14} height={14} className="shrink-0" />
+              <span>This session is at capacity. Enrolling will add to the waitlist.</span>
             </div>
           )}
           {!eligible && !enrolled && (

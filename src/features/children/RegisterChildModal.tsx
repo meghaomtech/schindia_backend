@@ -3,6 +3,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Field, Input, Select } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
+import { CalendarIcon, StarIcon } from '@/components/ui/icons';
 import { useStore } from '@/store/store';
 import { initialsOf } from '@/lib/colors';
 import { nextChildSystemId, uid } from '@/lib/ids';
@@ -40,12 +41,12 @@ const initialContact = (): Contact => ({
   isEmergency: true,
 });
 
-const emptyForm = (): FormState => ({
+const emptyForm = (centreId = ''): FormState => ({
   firstName: '',
   middleName: '',
   lastName: '',
   gender: '',
-  centreId: '',
+  centreId,
   sessionId: '',
   dateOfBirth: '',
   startDate: '',
@@ -56,12 +57,14 @@ const emptyForm = (): FormState => ({
 export function RegisterChildModal({
   open,
   onClose,
+  defaultCentreId = '',
 }: {
   open: boolean;
   onClose: () => void;
+  defaultCentreId?: string;
 }) {
   const { centres, children: kids, addChild } = useStore();
-  const [form, setForm] = useState<FormState>(emptyForm);
+  const [form, setForm] = useState<FormState>(() => emptyForm(defaultCentreId));
   const [systemId] = useState(() => nextChildSystemId());
   const [errors, setErrors] = useState<ValidationError[]>([]);
   const [siblingQuery, setSiblingQuery] = useState('');
@@ -91,7 +94,7 @@ export function RegisterChildModal({
     : null;
 
   function reset() {
-    setForm(emptyForm());
+    setForm(emptyForm(defaultCentreId));
     setErrors([]);
     setSiblingQuery('');
   }
@@ -270,12 +273,12 @@ export function RegisterChildModal({
                   onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })}
                   className="pr-9"
                 />
-                <span
+                <CalendarIcon
+                  width={14}
+                  height={14}
                   aria-hidden="true"
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-text-dim pointer-events-none"
-                >
-                  📅
-                </span>
+                />
               </div>
             </Field>
             <Field label="Start date" required error={errMap.startDate}>
@@ -287,12 +290,12 @@ export function RegisterChildModal({
                   invalid={!!errMap.startDate}
                   className="pr-9"
                 />
-                <span
+                <CalendarIcon
+                  width={14}
+                  height={14}
                   aria-hidden="true"
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-text-dim pointer-events-none"
-                >
-                  📅
-                </span>
+                />
               </div>
             </Field>
           </div>
@@ -453,7 +456,10 @@ function ContactCard({
         </div>
         <div className="flex items-center gap-1.5">
           {contact.isMain && (
-            <Badge tone="purple">★ Main contact</Badge>
+            <Badge tone="purple">
+              <StarIcon width={11} height={11} className="mr-1" />
+              Main contact
+            </Badge>
           )}
           {contact.isBillPayer && <Badge tone="blue">Bill payer</Badge>}
           {contact.isEmergency && <Badge tone="coral">Emergency</Badge>}

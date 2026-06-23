@@ -10,9 +10,17 @@ import { FamilyTab } from './tabs/FamilyTab';
 import { ChildBookingsTab } from './ChildBookingsTab';
 import { JourneyTab } from './tabs/JourneyTab';
 import { NotesTab } from './tabs/NotesTab';
+import { InvoicesTab } from './tabs/InvoicesTab';
 import type { Child } from '@/lib/types';
 
-type ProfileTab = 'activity' | 'about' | 'family' | 'bookings' | 'journey' | 'notes';
+type ProfileTab =
+  | 'activity'
+  | 'about'
+  | 'family'
+  | 'bookings'
+  | 'journey'
+  | 'notes'
+  | 'invoices';
 
 const TAB_ITEMS: { key: ProfileTab; label: string }[] = [
   { key: 'activity', label: 'Activity' },
@@ -21,6 +29,7 @@ const TAB_ITEMS: { key: ProfileTab; label: string }[] = [
   { key: 'bookings', label: 'Bookings' },
   { key: 'journey', label: 'Journey' },
   { key: 'notes', label: 'Notes' },
+  { key: 'invoices', label: 'Invoices' },
 ];
 
 export function ChildProfile({ child }: { child: Child }) {
@@ -77,6 +86,7 @@ export function ChildProfile({ child }: { child: Child }) {
         {tab === 'bookings' && <ChildBookingsTab child={child} />}
         {tab === 'journey' && <JourneyTab child={child} />}
         {tab === 'notes' && <NotesTab child={child} />}
+        {tab === 'invoices' && <InvoicesTab child={child} />}
       </div>
     </div>
   );

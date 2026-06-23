@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Field, Input, Select } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { ClockIcon } from '@/components/ui/icons';
 import { useStore } from '@/store/store';
 import { validateSession } from '@/lib/validation';
 import { uid } from '@/lib/ids';
 import { paletteFor } from '@/lib/colors';
-import type { AgeUnit, Session, ValidationError } from '@/lib/types';
+import type { AgeUnit, ID, Session, ValidationError } from '@/lib/types';
 
 interface FormState {
   name: string;
@@ -47,9 +48,11 @@ function durationLabel(h: number, m: number): string {
 
 export function SessionEditor({
   session,
+  centreId,
   onClose,
 }: {
   session: Session | null;
+  centreId: ID;
   onClose: () => void;
 }) {
   const { addSession, updateSession, deleteSession } = useStore();
@@ -88,6 +91,7 @@ export function SessionEditor({
     } else {
       const s: Session = {
         id: uid('s'),
+        centreId,
         name: form.name.trim(),
         childLimit: form.childLimit,
         ageFrom: form.ageFrom,
@@ -234,8 +238,9 @@ export function SessionEditor({
           </Field>
         </div>
         <div className="mt-2 flex items-center gap-3">
-          <span className="badge badge-olive">
-            ⏱ {durationLabel(form.durationHours, form.durationMinutes)}
+          <span className="badge badge-olive inline-flex items-center gap-1">
+            <ClockIcon width={12} height={12} />
+            {durationLabel(form.durationHours, form.durationMinutes)}
           </span>
           <span className="text-xs text-text-dim">Default is 1hr 30min</span>
         </div>

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Badge } from '@/components/ui/Badge';
+import { ChildrenIcon, RecurringIcon, UserIcon } from '@/components/ui/icons';
 import {
   DAY_LABELS,
   addDays,
@@ -228,14 +229,20 @@ export function WeekGrid({
                         {session.name}
                       </div>
                       {!showCompact && firstTeacher && (
-                        <div className="truncate opacity-90">
-                          👤 {firstTeacher}
-                          {extraTeachers > 0 && ` +${extraTeachers}`}
+                        <div className="truncate opacity-90 flex items-center gap-1">
+                          <UserIcon width={11} height={11} className="shrink-0" />
+                          <span className="truncate">
+                            {firstTeacher}
+                            {extraTeachers > 0 && ` +${extraTeachers}`}
+                          </span>
                         </div>
                       )}
                       {(showAll || showSome) && (
-                        <div className="opacity-90">
-                          👶 {slot.childIds.length}/{session.childLimit}
+                        <div className="opacity-90 flex items-center gap-1">
+                          <ChildrenIcon width={11} height={11} className="shrink-0" />
+                          <span>
+                            {slot.childIds.length}/{session.childLimit}
+                          </span>
                         </div>
                       )}
                       {showAll && (
@@ -247,7 +254,8 @@ export function WeekGrid({
                       )}
                       {recurring && height >= 80 && (
                         <div className="mt-auto opacity-70 text-[10px] flex items-center gap-1">
-                          <span aria-hidden="true">↻</span> Recurring
+                          <RecurringIcon width={11} height={11} className="shrink-0" />
+                          <span>Recurring</span>
                         </div>
                       )}
                     </div>

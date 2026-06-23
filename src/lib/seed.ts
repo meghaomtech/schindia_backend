@@ -5,11 +5,13 @@ import type {
   ChildEnrolment,
   OpeningTimes,
   Purchase,
+  Role,
   Session,
   SessionSlot,
   Teacher,
 } from './types';
 import { paletteFor } from './colors';
+import { buildPermissionsForPreset } from './permissions';
 
 const fullWeekOpen: OpeningTimes = {
   mon: { open: true, opensAt: '07:30', closesAt: '18:00' },
@@ -76,6 +78,7 @@ function withPalette(s: Omit<Session, 'colorBg' | 'colorText'>): Session {
 export const seedSessions: Session[] = [
   withPalette({
     id: 's1',
+    centreId: 'c1',
     name: 'Puppies',
     childLimit: 8,
     ageFrom: 0,
@@ -86,6 +89,7 @@ export const seedSessions: Session[] = [
   }),
   withPalette({
     id: 's2',
+    centreId: 'c1',
     name: 'Bears',
     childLimit: 12,
     ageFrom: 1,
@@ -96,6 +100,7 @@ export const seedSessions: Session[] = [
   }),
   withPalette({
     id: 's3',
+    centreId: 'c1',
     name: 'Cubs',
     childLimit: 10,
     ageFrom: 2,
@@ -103,6 +108,17 @@ export const seedSessions: Session[] = [
     ageUnit: 'years',
     durationHours: 2,
     durationMinutes: 0,
+  }),
+  withPalette({
+    id: 's4',
+    centreId: 'c2',
+    name: 'Stars',
+    childLimit: 8,
+    ageFrom: 1,
+    ageTo: 3,
+    ageUnit: 'years',
+    durationHours: 1,
+    durationMinutes: 30,
   }),
 ];
 
@@ -270,5 +286,65 @@ export const seedBillPayerBalances: BillPayerBalance[] = [
     contactId: 'co2',
     balance: 12.0,
     lastNote: 'Late fee unpaid — 19 May',
+  },
+];
+
+export const seedRoles: Role[] = [
+  {
+    id: 'role_mgr_c1',
+    centreId: 'c1',
+    name: 'Manager',
+    description: 'Full or near-full access to all features. Responsible for site configuration, staff management, and financial oversight.',
+    permissions: buildPermissionsForPreset('Manager'),
+    members: [
+      { id: 'rm1', name: 'Helen Brooks', email: 'helen.brooks@sunshine.co.uk' },
+    ],
+  },
+  {
+    id: 'role_tch_c1',
+    centreId: 'c1',
+    name: 'Teacher',
+    description: 'Day-to-day operational access. Can manage children, communications, and learning content. Limited financial and admin access.',
+    permissions: buildPermissionsForPreset('Teacher'),
+    members: [
+      { id: 'rm2', name: 'Ms. Johnson', email: 'johnson@sunshine.co.uk' },
+      { id: 'rm3', name: 'Mr. Patel', email: 'patel@sunshine.co.uk' },
+    ],
+  },
+  {
+    id: 'role_par_c1',
+    centreId: 'c1',
+    name: 'Parent',
+    description: "Limited read-only access to their own child's information, invoices, and communications from the setting.",
+    permissions: buildPermissionsForPreset('Parent'),
+    members: [
+      { id: 'rm4', name: 'Sarah Lawson', email: 'sarah.lawson@email.com' },
+    ],
+  },
+  {
+    id: 'role_mgr_c2',
+    centreId: 'c2',
+    name: 'Manager',
+    description: 'Full or near-full access to all features. Responsible for site configuration, staff management, and financial oversight.',
+    permissions: buildPermissionsForPreset('Manager'),
+    members: [
+      { id: 'rm5', name: 'Rajesh Kumar', email: 'rajesh@littlestars.co.uk' },
+    ],
+  },
+  {
+    id: 'role_tch_c2',
+    centreId: 'c2',
+    name: 'Teacher',
+    description: 'Day-to-day operational access. Can manage children, communications, and learning content. Limited financial and admin access.',
+    permissions: buildPermissionsForPreset('Teacher'),
+    members: [],
+  },
+  {
+    id: 'role_par_c2',
+    centreId: 'c2',
+    name: 'Parent',
+    description: "Limited read-only access to their own child's information, invoices, and communications from the setting.",
+    permissions: buildPermissionsForPreset('Parent'),
+    members: [],
   },
 ];

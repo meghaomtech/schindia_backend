@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { StarIcon } from '@/components/ui/icons';
 import { useStore } from '@/store/store';
 import { initialsOf } from '@/lib/colors';
 import { ContactModal } from '../ContactModal';
@@ -111,7 +112,12 @@ function ContactDisplayCard({
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-wrap justify-end">
-          {contact.isMain && <Badge tone="purple">★ Main contact</Badge>}
+          {contact.isMain && (
+            <Badge tone="purple">
+              <StarIcon width={11} height={11} className="mr-1" />
+              Main contact
+            </Badge>
+          )}
           {contact.isBillPayer && <Badge tone="blue">Bill payer</Badge>}
           {contact.isEmergency && <Badge tone="coral">Emergency</Badge>}
         </div>

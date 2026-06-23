@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
+import { CheckIcon, CloseIcon } from '@/components/ui/icons';
 import { useStore } from '@/store/store';
 import {
   formatLongDate,
@@ -154,7 +155,7 @@ export function ClosureDatesTab({ centre }: { centre: Centre }) {
                     aria-label={`Remove closure ${iso}`}
                     onClick={() => removeDate(iso)}
                   >
-                    ✕
+                    <CloseIcon width={16} height={16} />
                   </Button>
                 </li>
               ))}
@@ -173,7 +174,9 @@ export function ClosureDatesTab({ centre }: { centre: Centre }) {
           </Button>
         )}
         {savedAt && !dirty && (
-          <span className="text-sm text-olive">✓ Saved</span>
+          <span className="text-sm text-olive flex items-center gap-1">
+            <CheckIcon width={14} height={14} /> Saved
+          </span>
         )}
         {dirty && (
           <span className="text-sm text-text-muted">Unsaved changes</span>

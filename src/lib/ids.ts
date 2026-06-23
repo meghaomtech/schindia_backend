@@ -1,5 +1,6 @@
 let centreCounter = 1;
 let childCounter = 1;
+let invoiceCounter = 1;
 let counter = 1;
 
 export function nextCentreSystemId(): string {
@@ -10,6 +11,11 @@ export function nextChildSystemId(): string {
   return `CHD-${String(childCounter++).padStart(5, '0')}`;
 }
 
+export function nextInvoiceNumber(): string {
+  const yr = new Date().getFullYear();
+  return `INV-${yr}-${String(invoiceCounter++).padStart(4, '0')}`;
+}
+
 export function uid(prefix = 'id'): string {
   return `${prefix}_${counter++}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -17,5 +23,6 @@ export function uid(prefix = 'id'): string {
 export function _resetIdsForTests(): void {
   centreCounter = 1;
   childCounter = 1;
+  invoiceCounter = 1;
   counter = 1;
 }

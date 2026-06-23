@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Toggle } from '@/components/ui/Toggle';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { CheckIcon } from '@/components/ui/icons';
 import { useStore } from '@/store/store';
 import { DAY_KEYS } from '@/lib/dates';
 import type { Centre, DayKey, OpeningTimes } from '@/lib/types';
@@ -100,7 +101,11 @@ export function OpeningTimesTab({ centre }: { centre: Centre }) {
         <Button variant="primary" onClick={save}>
           Save opening times
         </Button>
-        {savedAt && <span className="text-sm text-olive">✓ Saved</span>}
+        {savedAt && (
+          <span className="text-sm text-olive flex items-center gap-1">
+            <CheckIcon width={14} height={14} /> Saved
+          </span>
+        )}
       </div>
     </div>
   );
