@@ -6,6 +6,12 @@ import {
   useMatch,
 } from 'react-router-dom';
 import { StoreProvider, useStore } from '@/store/store';
+import { AuthProvider, useAuth } from '@/features/auth/AuthContext';
+import { LoginPage } from '@/features/auth/LoginPage';
+import { SignupPage } from '@/features/auth/SignupPage';
+import { RootSetupPage } from '@/features/auth/RootSetupPage';
+import { ProtectedRoute } from '@/features/auth/ProtectedRoute';
+import { AccessRequestsPage } from '@/features/auth/AccessRequestsPage';
 import { LandingPage } from '@/features/landing/LandingPage';
 import { CentresPage } from '@/features/centres/CentresPage';
 import { CentreLayout } from '@/features/centres/CentreLayout';
@@ -16,9 +22,11 @@ import { CentreChildrenRoute } from '@/features/centres/CentreChildrenRoute';
 import { CentreRolesRoute } from '@/features/centres/CentreRolesRoute';
 import { InfoPage } from '@/features/info/InfoPage';
 import {
+  AccessRequestsIcon,
   CentresIcon,
   ChildrenIcon,
   InfoIcon,
+  LogoutIcon,
   RolesIcon,
   SessionsIcon,
   TimetableIcon,
@@ -38,6 +46,7 @@ function Sidebar() {
   const centreMatch = useMatch('/admin/centres/:centreId/*');
   const openCentreId = centreMatch?.params.centreId ?? null;
   const { centres } = useStore();
+  const { isRoot, user, logout } = useAuth();
   const openCentre = centres.find((c) => c.id === openCentreId) ?? null;
 
   return (
@@ -112,8 +121,48 @@ function Sidebar() {
           <InfoIcon className="shrink-0" />
           <span>Info</span>
         </NavLink>
+
+        {/* Root-only: Access Requests */}
+        {isRoot && (
+          <NavLink
+            to="/admin/access-requests"
+            className={({ isActive }) =>
+              [
+                'flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium',
+                isActive
+                  ? 'bg-olive/10 text-olive'
+                  : 'text-text-muted hover:bg-beige hover:text-text',
+              ].join(' ')
+            }
+          >
+            <AccessRequestsIcon className="shrink-0" />
+            <span>Access Requests</span>
+          </NavLink>
+        )}
       </nav>
-      <div className="text-xs text-text-dim px-2 pt-3 border-t border-border">
+
+      {/* User info & logout */}
+      <div className="border-t border-border pt-3 mt-2">
+        <div className="flex items-center gap-2 px-2 mb-2">
+          <div className="w-7 h-7 rounded-full bg-olive/10 flex items-center justify-center text-xs font-semibold text-olive shrink-0">
+            {user?.name?.charAt(0).toUpperCase() ?? 'U'}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-charcoal truncate">{user?.name}</p>
+            <p className="text-[10px] text-text-dim truncate">
+              {isRoot ? 'Root Admin' : 'Admin'}
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={logout}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm text-text-muted hover:bg-beige hover:text-text w-full transition-colors"
+        >
+          <LogoutIcon className="shrink-0" width={16} height={16} />
+          <span>Logout</span>
+        </button>
+      </div>
+      <div className="text-xs text-text-dim px-2 pt-3 border-t border-border mt-2">
         Phase 1 · v0.1
       </div>
     </aside>
@@ -136,6 +185,7 @@ function AdminLayout() {
             <Route path="roles" element={<CentreRolesRoute />} />
           </Route>
           <Route path="info" element={<InfoPage />} />
+          <Route path="access-requests" element={<AccessRequestsPage />} />
           <Route path="*" element={<Navigate to="/admin/centres" replace />} />
         </Routes>
       </main>
@@ -145,12 +195,21 @@ function AdminLayout() {
 
 export default function App() {
   return (
-    <StoreProvider>
-      <Routes>
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/admin/*" element={<AdminLayout />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </StoreProvider>
+    <AuthProvider>
+      <StoreProvider>
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/setup" element={<RootSetupPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
+          <Route path="/admin/*" element={
+            <ProtectedRoute>
+              <AdminLayout />
+            </ProtectedRoute>
+          } />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </StoreProvider>
+    </AuthProvider>
   );
 }

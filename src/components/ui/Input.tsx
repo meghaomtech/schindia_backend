@@ -1,3 +1,4 @@
+import { forwardRef } from 'react';
 import type { InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react';
 
 export interface FieldProps {
@@ -30,11 +31,15 @@ export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   invalid?: boolean;
 }
 
-export function Input({ invalid, className = '', ...rest }: InputProps) {
-  return (
-    <input {...rest} className={`input ${invalid ? 'input-error' : ''} ${className}`} />
-  );
-}
+export const Input = forwardRef<HTMLInputElement, InputProps>(
+  ({ invalid, className = '', ...rest }, ref) => {
+    return (
+      <input ref={ref} {...rest} className={`input ${invalid ? 'input-error' : ''} ${className}`} />
+    );
+  }
+);
+
+Input.displayName = 'Input';
 
 export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   invalid?: boolean;
