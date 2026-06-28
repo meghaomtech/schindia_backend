@@ -25,30 +25,28 @@ function statusColor(status: string): 'gold' | 'green' | 'danger' {
 
 export function AccessRequestsPage() {
   const { isRoot, getAccessRequests, approveRequest, rejectRequest } = useAuth();
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [requests, setRequests] = useState<AccessRequest[]>(() => getAccessRequests());
 
-  const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+  const refreshRequests = useCallback(() => {
+    setRequests(getAccessRequests());
+  }, [getAccessRequests]);
 
   // Only root admin can view this page
   if (!isRoot) {
     return <Navigate to="/admin" replace />;
   }
 
-  // Force re-read from localStorage on each render/refresh
-  const requests = getAccessRequests();
-  void refreshKey; // use the key to trigger re-render
-
   const pendingRequests = requests.filter((r) => r.status === 'pending');
   const processedRequests = requests.filter((r) => r.status !== 'pending');
 
   function handleApprove(req: AccessRequest) {
     approveRequest(req.id);
-    refresh();
+    refreshRequests();
   }
 
   function handleReject(req: AccessRequest) {
     rejectRequest(req.id);
-    refresh();
+    refreshRequests();
   }
 
   return (

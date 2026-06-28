@@ -11,7 +11,9 @@ export function LoginPage() {
   const { login, isAuthenticated, isRootSetup } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as { from?: string })?.from || '/admin';
+  const from = (location.state && typeof location.state === 'object' && 'from' in location.state
+    ? (location.state as { from?: string }).from
+    : undefined) || '/admin';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -29,8 +31,7 @@ export function LoginPage() {
 
   // Redirect if already authenticated
   if (isAuthenticated) {
-    navigate('/admin', { replace: true });
-    return null;
+    return <Navigate to="/admin" replace />;
   }
 
   function getError(field: string) {

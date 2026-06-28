@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
 import { useAuth } from './AuthContext';
@@ -9,7 +9,6 @@ import type { ValidationError } from '@/lib/types';
 
 export function SignupPage() {
   const { signup, isAuthenticated, isRootSetup } = useAuth();
-  const navigate = useNavigate();
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -32,8 +31,7 @@ export function SignupPage() {
 
   // Redirect if already authenticated
   if (isAuthenticated) {
-    navigate('/admin', { replace: true });
-    return null;
+    return <Navigate to="/admin" replace />;
   }
 
   function getError(field: string) {
@@ -62,13 +60,12 @@ export function SignupPage() {
 
     setLoading(true);
     try {
-      await signup(name, email, password);
-    } catch (err) {
-      if (err instanceof Error && err.message === 'PENDING_APPROVAL') {
+      const result = await signup(name, email, password);
+      if (result.status === 'pending') {
         setSubmitted(true);
-      } else {
-        setFormError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
       }
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
     } finally {
       setLoading(false);
     }

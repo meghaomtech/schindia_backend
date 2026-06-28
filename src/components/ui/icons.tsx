@@ -284,7 +284,7 @@ export function AccessRequestsIcon(props: IconProps) {
     <Svg {...props}>
       <circle cx="12" cy="8" r="3.5" />
       <path d="M4.5 20c1-3.5 4-5.5 7.5-5.5s6.5 2 7.5 5.5" />
-      <path d="M18 8l2 2 4-4" />
+      <path d="M15 11l2 2 4-4" />
     </Svg>
   );
 }

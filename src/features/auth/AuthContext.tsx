@@ -32,7 +32,7 @@ interface AuthContextValue {
   isRoot: boolean;
   isRootSetup: boolean;
   login: (email: string, password: string) => Promise<void>;
-  signup: (name: string, email: string, password: string) => Promise<void>;
+  signup: (name: string, email: string, password: string) => Promise<{ status: 'pending' | 'success' }>;
   setupRoot: (name: string, email: string, password: string) => Promise<void>;
   logout: () => void;
   getAccessRequests: () => AccessRequest[];
@@ -44,7 +44,10 @@ const AUTH_USER_KEY = 'shichida_auth_user';
 const AUTH_USERS_KEY = 'shichida_auth_users';
 const ROOT_SETUP_KEY = 'shichida_root_setup';
 
-// Simple hash for demo purposes (not production-grade)
+// WARNING: Java-style hashCode — not one-way and has massive collision risk.
+// This is only acceptable for localStorage-only demo purposes.
+// Passwords stored this way are plaintext-equivalent (visible via DevTools).
+// If this ever moves to a real backend, replace with bcrypt or argon2 server-side.
 function simpleHash(str: string): string {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -112,7 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(authUser);
   }, []);
 
-  const signup = useCallback(async (name: string, email: string, password: string) => {
+  const signup = useCallback(async (name: string, email: string, password: string): Promise<{ status: 'pending' | 'success' }> => {
     // Simulate network delay
     await new Promise((r) => setTimeout(r, 500));
 
@@ -140,7 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     saveStoredUsers([...users, newUser]);
 
     // Don't auto-login — user must wait for root approval
-    throw new Error('PENDING_APPROVAL');
+    return { status: 'pending' };
   }, []);
 
   const setupRoot = useCallback(async (name: string, email: string, password: string) => {
