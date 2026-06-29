@@ -8,8 +8,14 @@ import {
 
 const TABLE_NAME = process.env.TABLE_NAME || 'ShichidaInvoices';
 
+const clientConfig = { region: process.env.AWS_REGION || 'ap-south-1' };
+if (process.env.DYNAMODB_ENDPOINT) {
+  clientConfig.endpoint = process.env.DYNAMODB_ENDPOINT;
+  clientConfig.credentials = { accessKeyId: 'local', secretAccessKey: 'local' };
+}
+
 const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: process.env.AWS_REGION || 'ap-south-1' }),
+  new DynamoDBClient(clientConfig),
   { marshallOptions: { removeUndefinedValues: true } }
 );
 
