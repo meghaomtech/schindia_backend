@@ -1,46 +1,26 @@
-// Local dev API server — runs the Lambda handler directly against DynamoDB Local.
-// Start with: node backend/dev-server.mjs
-// Requires DynamoDB Local on port 8000: docker compose up -d
+// Local dev API server — runs the Lambda handler against the real AWS dev DynamoDB table.
+// Uses AWS credentials from AWS_PROFILE (or ambient credentials).
+//
+// Start with:
+//   AWS_PROFILE=shichida-setup npm run dev:api
+//
+// No Docker required. Data goes to ShichidaInvoices-dev in AWS, never production.
 
 import http from 'http';
-import { DynamoDBClient, CreateTableCommand, DescribeTableCommand } from '@aws-sdk/client-dynamodb';
 import { handler } from './lambda/index.mjs';
 
 const PORT = 3001;
-const TABLE_NAME = 'ShichidaInvoices';
-const DYNAMODB_ENDPOINT = 'http://localhost:8000';
 
-// Point the Lambda handler at local DynamoDB
-process.env.TABLE_NAME = TABLE_NAME;
-process.env.AWS_REGION = 'local';
-process.env.DYNAMODB_ENDPOINT = DYNAMODB_ENDPOINT;
-
-const dbClient = new DynamoDBClient({
-  endpoint: DYNAMODB_ENDPOINT,
-  region: 'local',
-  credentials: { accessKeyId: 'local', secretAccessKey: 'local' },
-});
-
-async function ensureTable() {
-  try {
-    await dbClient.send(new DescribeTableCommand({ TableName: TABLE_NAME }));
-    console.log(`  Table "${TABLE_NAME}" ready`);
-  } catch {
-    await dbClient.send(new CreateTableCommand({
-      TableName: TABLE_NAME,
-      AttributeDefinitions: [{ AttributeName: 'invoiceNumber', AttributeType: 'S' }],
-      KeySchema: [{ AttributeName: 'invoiceNumber', KeyType: 'HASH' }],
-      BillingMode: 'PAY_PER_REQUEST',
-    }));
-    console.log(`  Table "${TABLE_NAME}" created`);
-  }
-}
+// Point the Lambda handler at the dev table in real AWS
+process.env.TABLE_NAME = 'ShichidaInvoices-dev';
+process.env.AWS_REGION = 'ap-south-1';
+// No DYNAMODB_ENDPOINT set → uses real AWS
 
 async function buildLambdaEvent(req) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const pathParams = {};
-  const invoiceMatch = url.pathname.match(/^\/invoices\/(.+)$/);
-  if (invoiceMatch) pathParams.invoiceNumber = decodeURIComponent(invoiceMatch[1]);
+  const match = url.pathname.match(/^\/invoices\/(.+)$/);
+  if (match) pathParams.invoiceNumber = decodeURIComponent(match[1]);
 
   let body = '';
   for await (const chunk of req) body += chunk;
@@ -61,22 +41,14 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(result.statusCode);
     res.end(result.body ?? '');
   } catch (e) {
-    console.error('Dev server error:', e);
+    console.error('Dev server error:', e.message);
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: e.message }));
   }
 });
 
-try {
-  await ensureTable();
-} catch (e) {
-  console.error('\n  ❌  Cannot connect to DynamoDB Local.');
-  console.error('     Make sure Docker is running: docker compose up -d\n');
-  process.exit(1);
-}
-
 server.listen(PORT, () => {
-  console.log(`\n  ✅  Local API running at http://localhost:${PORT}`);
-  console.log(`      DynamoDB Local     : ${DYNAMODB_ENDPOINT}`);
-  console.log(`      Table              : ${TABLE_NAME}\n`);
+  console.log(`\n  ✅  Local API → http://localhost:${PORT}`);
+  console.log(`      DynamoDB table : ShichidaInvoices-dev (AWS ap-south-1)`);
+  console.log(`      Profile        : ${process.env.AWS_PROFILE ?? 'default'}\n`);
 });
