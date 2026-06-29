@@ -7,14 +7,15 @@
 // No Docker required. Data goes to ShichidaInvoices-dev in AWS, never production.
 
 import http from 'http';
-import { handler } from './lambda/index.mjs';
 
 const PORT = 3001;
 
-// Point the Lambda handler at the dev table in real AWS
+// Set env vars BEFORE importing the Lambda — static imports are hoisted
+// and would evaluate TABLE_NAME before these assignments run.
 process.env.TABLE_NAME = 'ShichidaInvoices-dev';
 process.env.AWS_REGION = 'ap-south-1';
-// No DYNAMODB_ENDPOINT set → uses real AWS
+
+const { handler } = await import('./lambda/index.mjs');
 
 async function buildLambdaEvent(req) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
