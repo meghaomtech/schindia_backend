@@ -4,8 +4,34 @@ Description: Shichida Admin — S3 + CloudFront frontend hosting
 Parameters:
   BucketName:
     Type: String
+  AuthBase64:
+    Type: String
+    Description: Base64-encoded "username:password" for Basic Auth
+    Default: ""
 
 Resources:
+  BasicAuthFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: shichida-basic-auth
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Restricts access to the Shichida admin portal
+        Runtime: cloudfront-js-2.0
+      FunctionCode: !Sub |
+        var EXPECTED = 'Basic ${AuthBase64}';
+        function handler(event) {
+          var auth = event.request.headers.authorization;
+          if (!auth || auth.value !== EXPECTED) {
+            return {
+              statusCode: 401,
+              statusDescription: 'Unauthorized',
+              headers: { 'www-authenticate': { value: 'Basic realm="Shichida Admin"' } }
+            };
+          }
+          return event.request;
+        }
+
   FrontendBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -40,9 +66,11 @@ Resources:
         DefaultCacheBehavior:
           TargetOriginId: S3Origin
           ViewerProtocolPolicy: redirect-to-https
-          # AWS managed CachingOptimized policy
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
           Compress: true
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt BasicAuthFunction.FunctionMetadata.FunctionARN
         # Send all 403/404s back to index.html so React Router handles them
         CustomErrorResponses:
           - ErrorCode: 403
