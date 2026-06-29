@@ -23,15 +23,19 @@ function formatINR(n: number): string {
 export function InvoicePreview({
   data,
   sent,
+  sending = false,
   onBack,
   onSend,
   onCreateNew,
+  onViewHistory,
 }: {
   data: InvoiceFormData;
   sent: boolean;
+  sending?: boolean;
   onBack: () => void;
   onSend: () => void;
   onCreateNew: () => void;
+  onViewHistory?: () => void;
 }) {
   const regFee = data.registrationFee ?? 0;
   const sessionFee = data.sessionFeeAmount ?? 0;
@@ -53,7 +57,12 @@ export function InvoicePreview({
             <span className="font-semibold">{data.email || data.parentName}</span>
           </p>
         </div>
-        <Button variant="primary" onClick={onCreateNew}>+ Create New Invoice</Button>
+        <div className="flex items-center gap-3">
+          <Button variant="primary" onClick={onCreateNew}>+ Create New Invoice</Button>
+          {onViewHistory && (
+            <Button onClick={onViewHistory}>View Invoice History →</Button>
+          )}
+        </div>
       </div>
     );
   }
@@ -62,8 +71,10 @@ export function InvoicePreview({
     <div className="max-w-2xl mx-auto p-6 space-y-5">
       {/* Action bar */}
       <div className="flex items-center justify-between">
-        <Button onClick={onBack}>← Back to Form</Button>
-        <Button variant="primary" onClick={onSend}>Send Invoice →</Button>
+        <Button onClick={onBack} disabled={sending}>← Back to Form</Button>
+        <Button variant="primary" onClick={onSend} disabled={sending}>
+          {sending ? 'Saving…' : 'Send Invoice →'}
+        </Button>
       </div>
 
       {/* Invoice document — matches Sunny's format */}
