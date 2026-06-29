@@ -82,11 +82,11 @@ export function InvoicePreview({
 
         {/* Top header bar with logo area */}
         <div className="px-10 pt-8 pb-4 flex items-start justify-between">
-          {/* Logo placeholder */}
-          <div className="w-20 h-20 rounded-lg bg-[#1a5fa8]/10 border-2 border-[#1a5fa8]/20 flex flex-col items-center justify-center text-[#1a5fa8]">
-            <div className="text-xs font-bold leading-tight text-center">SHICHIDA</div>
-            <div className="text-[10px] font-medium">INDIA</div>
-          </div>
+          <img
+            src="/Shichida India logo.png"
+            alt="Shichida India"
+            className="h-20 w-auto object-contain"
+          />
           <div />
         </div>
 
