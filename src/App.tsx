@@ -15,10 +15,12 @@ import { CentreTimetableRoute } from '@/features/centres/CentreTimetableRoute';
 import { CentreChildrenRoute } from '@/features/centres/CentreChildrenRoute';
 import { CentreRolesRoute } from '@/features/centres/CentreRolesRoute';
 import { InfoPage } from '@/features/info/InfoPage';
+import { InvoiceGeneratorPage } from '@/features/invoice-generator/InvoiceGeneratorPage';
 import {
   CentresIcon,
   ChildrenIcon,
   InfoIcon,
+  ReceiptIcon,
   RolesIcon,
   SessionsIcon,
   TimetableIcon,
@@ -99,6 +101,21 @@ function Sidebar() {
         )}
 
         <NavLink
+          to="/admin/invoices"
+          className={({ isActive }) =>
+            [
+              'flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium',
+              isActive
+                ? 'bg-olive/10 text-olive'
+                : 'text-text-muted hover:bg-beige hover:text-text',
+            ].join(' ')
+          }
+        >
+          <ReceiptIcon className="shrink-0" />
+          <span>Invoices</span>
+        </NavLink>
+
+        <NavLink
           to="/admin/info"
           className={({ isActive }) =>
             [
@@ -135,6 +152,7 @@ function AdminLayout() {
             <Route path="children" element={<CentreChildrenRoute />} />
             <Route path="roles" element={<CentreRolesRoute />} />
           </Route>
+          <Route path="invoices" element={<InvoiceGeneratorPage />} />
           <Route path="info" element={<InfoPage />} />
           <Route path="*" element={<Navigate to="/admin/centres" replace />} />
         </Routes>
