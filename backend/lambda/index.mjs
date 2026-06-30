@@ -4,9 +4,11 @@ import {
   PutCommand,
   GetCommand,
   ScanCommand,
+  DeleteCommand,
 } from '@aws-sdk/lib-dynamodb';
 
 const TABLE_NAME = process.env.TABLE_NAME || 'ShichidaInvoices';
+const CENTERS_TABLE = process.env.CENTERS_TABLE || 'ShichidaCenters';
 
 const clientConfig = { region: process.env.AWS_REGION || 'ap-south-1' };
 if (process.env.DYNAMODB_ENDPOINT) {
@@ -93,6 +95,29 @@ export const handler = async (event) => {
         (b.invoiceNumber || '').localeCompare(a.invoiceNumber || '')
       );
       return ok({ invoices: items, count: items.length });
+    }
+
+    // POST /centers — save/upsert a center profile
+    if (method === 'POST' && path === '/centers') {
+      const body = JSON.parse(event.body || '{}');
+      if (!body.centerCode) return err(400, 'centerCode is required');
+      await ddb.send(new PutCommand({ TableName: CENTERS_TABLE, Item: body }));
+      return ok({ success: true, centerCode: body.centerCode });
+    }
+
+    // GET /centers — list all saved centers
+    if (method === 'GET' && path === '/centers') {
+      const result = await ddb.send(new ScanCommand({ TableName: CENTERS_TABLE }));
+      return ok({ centers: result.Items || [] });
+    }
+
+    // DELETE /centers/{centerCode} — remove a center profile
+    if (method === 'DELETE' && pathParams.centerCode) {
+      await ddb.send(new DeleteCommand({
+        TableName: CENTERS_TABLE,
+        Key: { centerCode: decodeURIComponent(pathParams.centerCode) },
+      }));
+      return ok({ success: true });
     }
 
     return err(404, 'Not found');

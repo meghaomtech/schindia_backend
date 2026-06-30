@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
 import { TrashIcon } from '@/components/ui/icons';
@@ -7,16 +7,21 @@ import type {
   ExtraLineItem,
   SavedCenter,
 } from './invoiceGeneratorTypes';
+import { saveCenterToCloud, listCentersFromCloud, deleteCenterFromCloud, isApiConfigured } from '@/lib/invoiceApi';
 
 const CENTERS_KEY = 'shichida_saved_centers_v2';
 const INV_COUNTER_KEY = 'shichida_inv_counter_v2';
 
-function loadSavedCenters(): SavedCenter[] {
+function loadSavedCentersLocal(): SavedCenter[] {
   try {
     return JSON.parse(localStorage.getItem(CENTERS_KEY) ?? '[]');
   } catch {
     return [];
   }
+}
+
+function persistCentersLocal(centers: SavedCenter[]) {
+  localStorage.setItem(CENTERS_KEY, JSON.stringify(centers));
 }
 
 export function nextInvoiceNum(): string {
@@ -49,10 +54,26 @@ export function InvoiceForm({
   onChange: (d: InvoiceFormData) => void;
   onGenerate: () => void;
 }) {
-  const [savedCenters, setSavedCenters] = useState<SavedCenter[]>(loadSavedCenters);
+  const [savedCenters, setSavedCenters] = useState<SavedCenter[]>(loadSavedCentersLocal);
   const [errors, setErrors] = useState<FormErrors>({});
   const [centerSaved, setCenterSaved] = useState(false);
   const [bankSaved, setBankSaved] = useState(false);
+
+  // On mount: merge cloud centers into localStorage so latest profiles are available
+  useEffect(() => {
+    if (!isApiConfigured()) return;
+    listCentersFromCloud().then((cloudCenters) => {
+      if (!cloudCenters.length) return;
+      const local = loadSavedCentersLocal();
+      const merged = [...local];
+      for (const cc of cloudCenters) {
+        if (!merged.find((l) => l.centerCode === cc.centerCode)) merged.push(cc);
+        else merged.splice(merged.findIndex((l) => l.centerCode === cc.centerCode), 1, cc);
+      }
+      persistCentersLocal(merged);
+      setSavedCenters(merged);
+    }).catch(() => { /* silently use localStorage if cloud is unavailable */ });
+  }, []);
 
   function set<K extends keyof InvoiceFormData>(key: K, value: InvoiceFormData[K]) {
     onChange({ ...data, [key]: value });
@@ -97,10 +118,13 @@ export function InvoiceForm({
         upiId: data.upiId,
       }];
     }
-    localStorage.setItem(CENTERS_KEY, JSON.stringify(updated));
+    persistCentersLocal(updated);
     setSavedCenters(updated);
     setCenterSaved(true);
     setTimeout(() => setCenterSaved(false), 2000);
+    // Sync to cloud (fire-and-forget — localStorage is the source of truth locally)
+    const saved = updated.find((c) => c.centerCode === data.centerCode);
+    if (saved) saveCenterToCloud(saved).catch(() => {});
   }
 
   function saveBankAccount() {
@@ -130,9 +154,11 @@ export function InvoiceForm({
   }
 
   function deleteCenter(id: string) {
+    const target = savedCenters.find((c) => c.id === id);
     const updated = savedCenters.filter((c) => c.id !== id);
-    localStorage.setItem(CENTERS_KEY, JSON.stringify(updated));
+    persistCentersLocal(updated);
     setSavedCenters(updated);
+    if (target) deleteCenterFromCloud(target.centerCode).catch(() => {});
   }
 
   function updateExtra(id: string, patch: Partial<ExtraLineItem>) {

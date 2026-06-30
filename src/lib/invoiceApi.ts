@@ -1,4 +1,4 @@
-import type { InvoiceFormData } from '@/features/invoice-generator/invoiceGeneratorTypes';
+import type { InvoiceFormData, SavedCenter } from '@/features/invoice-generator/invoiceGeneratorTypes';
 
 const BASE_URL = import.meta.env.VITE_INVOICES_API_URL as string | undefined;
 
@@ -51,4 +51,30 @@ export async function getInvoice(invoiceNumber: string): Promise<InvoiceFormData
   const res = await fetch(apiUrl(`/invoices/${invoiceNumber}`));
   if (!res.ok) throw new Error(`Not found: ${res.status}`);
   return res.json();
+}
+
+// ── Centers ────────────────────────────────────────────────────────────
+
+export async function saveCenterToCloud(center: SavedCenter): Promise<void> {
+  if (!BASE_URL) return;
+  const res = await fetch(apiUrl('/centers'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(center),
+  });
+  if (!res.ok) throw new Error(`Center save failed: ${res.status}`);
+}
+
+export async function listCentersFromCloud(): Promise<SavedCenter[]> {
+  if (!BASE_URL) return [];
+  const res = await fetch(apiUrl('/centers'));
+  if (!res.ok) throw new Error(`Center list failed: ${res.status}`);
+  const data = await res.json();
+  return data.centers ?? [];
+}
+
+export async function deleteCenterFromCloud(centerCode: string): Promise<void> {
+  if (!BASE_URL) return;
+  const res = await fetch(apiUrl(`/centers/${encodeURIComponent(centerCode)}`), { method: 'DELETE' });
+  if (!res.ok) throw new Error(`Center delete failed: ${res.status}`);
 }

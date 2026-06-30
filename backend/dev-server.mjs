@@ -13,6 +13,7 @@ const PORT = 3001;
 // Set env vars BEFORE importing the Lambda — static imports are hoisted
 // and would evaluate TABLE_NAME before these assignments run.
 process.env.TABLE_NAME = 'ShichidaInvoices-dev';
+process.env.CENTERS_TABLE = 'ShichidaCenters-dev';
 process.env.AWS_REGION = 'ap-south-1';
 
 const { handler } = await import('./lambda/index.mjs');
