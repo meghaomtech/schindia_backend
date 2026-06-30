@@ -1,10 +1,16 @@
 export interface SavedCenter {
   id: string;
   centerCode: string;
+  centerLocation: string;
+  fullAddress: string;
+  centerEmail: string;
+  centerPhone: string;
+  gstNumber: string;
+  website: string;
   bankName: string;
   accountNumber: string;
   ifscCode: string;
-  gstNumber: string;
+  upiId: string;
 }
 
 export interface ExtraLineItem {
@@ -15,12 +21,20 @@ export interface ExtraLineItem {
 }
 
 export interface InvoiceFormData {
-  // Center / payment details (saveable)
+  // Center details (saveable)
   centerCode: string;
+  centerLocation: string;
+  fullAddress: string;
+  centerEmail: string;
+  centerPhone: string;
+  gstNumber: string;
+  website: string;
+
+  // Bank details (saveable)
   bankName: string;
   accountNumber: string;
   ifscCode: string;
-  gstNumber: string;
+  upiId: string;
 
   // Student details
   studentName: string;
@@ -33,6 +47,8 @@ export interface InvoiceFormData {
   invoiceNumber: string;
   invoiceDate: string;
   dueDate: string;
+  gstPercent: number;
+  debitBroughtForward: number;
 
   // Registration line items
   registrationFee: number;
@@ -40,6 +56,9 @@ export interface InvoiceFormData {
   sessionFeeEnd: string;
   sessionFeeAmount: number;
 
-  // Additional items
+  // Extra charges
   extraItems: ExtraLineItem[];
+
+  // Deductions / Credits
+  deductions: ExtraLineItem[];
 }

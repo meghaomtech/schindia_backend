@@ -49,7 +49,6 @@ export function InvoiceHistory() {
         data={viewing}
         sent={false}
         onBack={() => setViewing(null)}
-        onSend={() => {}}
         onCreateNew={() => setViewing(null)}
       />
     );

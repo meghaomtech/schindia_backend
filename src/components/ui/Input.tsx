@@ -30,9 +30,10 @@ export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   invalid?: boolean;
 }
 
-export function Input({ invalid, className = '', ...rest }: InputProps) {
+export function Input({ invalid, className = '', type, ...rest }: InputProps) {
+  const handleWheel = type === 'number' ? (e: React.WheelEvent<HTMLInputElement>) => { e.currentTarget.blur(); } : undefined;
   return (
-    <input {...rest} className={`input ${invalid ? 'input-error' : ''} ${className}`} />
+    <input {...rest} type={type} onWheel={handleWheel} className={`input ${invalid ? 'input-error' : ''} ${className}`} />
   );
 }
 

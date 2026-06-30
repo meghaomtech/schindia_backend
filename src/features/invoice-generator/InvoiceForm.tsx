@@ -11,8 +11,6 @@ import type {
 const CENTERS_KEY = 'shichida_saved_centers_v2';
 const INV_COUNTER_KEY = 'shichida_inv_counter_v2';
 
-const COMPANY_GST = '06AAKCB5662Q1Z0';
-
 function loadSavedCenters(): SavedCenter[] {
   try {
     return JSON.parse(localStorage.getItem(CENTERS_KEY) ?? '[]');
@@ -53,6 +51,8 @@ export function InvoiceForm({
 }) {
   const [savedCenters, setSavedCenters] = useState<SavedCenter[]>(loadSavedCenters);
   const [errors, setErrors] = useState<FormErrors>({});
+  const [centerSaved, setCenterSaved] = useState(false);
+  const [bankSaved, setBankSaved] = useState(false);
 
   function set<K extends keyof InvoiceFormData>(key: K, value: InvoiceFormData[K]) {
     onChange({ ...data, [key]: value });
@@ -66,27 +66,67 @@ export function InvoiceForm({
     if (existing) {
       updated = savedCenters.map((c) =>
         c.centerCode === data.centerCode
-          ? { ...c, bankName: data.bankName, accountNumber: data.accountNumber, ifscCode: data.ifscCode, gstNumber: data.gstNumber }
+          ? {
+              ...c,
+              centerLocation: data.centerLocation,
+              fullAddress: data.fullAddress,
+              centerEmail: data.centerEmail,
+              centerPhone: data.centerPhone,
+              gstNumber: data.gstNumber,
+              website: data.website,
+              bankName: data.bankName,
+              accountNumber: data.accountNumber,
+              ifscCode: data.ifscCode,
+              upiId: data.upiId,
+            }
           : c
       );
     } else {
       updated = [...savedCenters, {
         id: uid(),
         centerCode: data.centerCode,
+        centerLocation: data.centerLocation,
+        fullAddress: data.fullAddress,
+        centerEmail: data.centerEmail,
+        centerPhone: data.centerPhone,
+        gstNumber: data.gstNumber,
+        website: data.website,
         bankName: data.bankName,
         accountNumber: data.accountNumber,
         ifscCode: data.ifscCode,
-        gstNumber: data.gstNumber,
+        upiId: data.upiId,
       }];
     }
     localStorage.setItem(CENTERS_KEY, JSON.stringify(updated));
     setSavedCenters(updated);
+    setCenterSaved(true);
+    setTimeout(() => setCenterSaved(false), 2000);
+  }
+
+  function saveBankAccount() {
+    if (!data.centerCode.trim()) return;
+    saveCenter();
+    setBankSaved(true);
+    setTimeout(() => setBankSaved(false), 2000);
   }
 
   function loadCenter(centerCode: string) {
     const c = savedCenters.find((x) => x.centerCode === centerCode);
     if (!c) return;
-    onChange({ ...data, centerCode: c.centerCode, bankName: c.bankName, accountNumber: c.accountNumber, ifscCode: c.ifscCode, gstNumber: c.gstNumber });
+    onChange({
+      ...data,
+      centerCode: c.centerCode,
+      centerLocation: c.centerLocation,
+      fullAddress: c.fullAddress,
+      centerEmail: c.centerEmail,
+      centerPhone: c.centerPhone,
+      gstNumber: c.gstNumber,
+      website: c.website,
+      bankName: c.bankName,
+      accountNumber: c.accountNumber,
+      ifscCode: c.ifscCode,
+      upiId: c.upiId,
+    });
   }
 
   function deleteCenter(id: string) {
@@ -101,6 +141,14 @@ export function InvoiceForm({
 
   function removeExtra(id: string) {
     set('extraItems', data.extraItems.filter((e) => e.id !== id));
+  }
+
+  function updateDeduction(id: string, patch: Partial<ExtraLineItem>) {
+    set('deductions', data.deductions.map((e) => (e.id === id ? { ...e, ...patch } : e)));
+  }
+
+  function removeDeduction(id: string) {
+    set('deductions', data.deductions.filter((e) => e.id !== id));
   }
 
   function validate(): boolean {
@@ -126,45 +174,40 @@ export function InvoiceForm({
         </p>
       </div>
 
-      {/* Center / Payment Details */}
+      {/* Center Details */}
       <section className="card p-5 space-y-4">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <h2 className="font-semibold">Center & Payment Details</h2>
+        <h2 className="font-semibold">Center Details</h2>
+        <p className="text-sm text-orange-500 font-semibold">Shichida India™</p>
+
+        {savedCenters.length > 0 && (
           <div className="flex items-center gap-2 flex-wrap">
-            {savedCenters.length > 0 && (
-              <div className="flex items-center gap-1">
-                <select
-                  className="input h-8 py-0 text-xs w-44"
-                  defaultValue=""
-                  onChange={(e) => { if (e.target.value) loadCenter(e.target.value); }}
-                >
-                  <option value="">Load saved center…</option>
-                  {savedCenters.map((c) => (
-                    <option key={c.id} value={c.centerCode}>{c.centerCode}</option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  title="Delete this saved center"
-                  className="h-8 w-8 inline-flex items-center justify-center rounded-md text-text-muted hover:text-danger hover:bg-danger/10"
-                  onClick={() => {
-                    const sel = document.querySelector<HTMLSelectElement>('.center-sel-v2');
-                    const found = savedCenters.find((c) => c.centerCode === sel?.value);
-                    if (found) deleteCenter(found.id);
-                  }}
-                >
-                  <TrashIcon width={14} height={14} />
-                </button>
-              </div>
-            )}
-            <Button onClick={saveCenter} className="h-8 py-0 text-xs">
-              Save center
-            </Button>
+            <select
+              className="input h-8 py-0 text-xs w-44"
+              defaultValue=""
+              onChange={(e) => { if (e.target.value) loadCenter(e.target.value); }}
+            >
+              <option value="">Load saved center…</option>
+              {savedCenters.map((c) => (
+                <option key={c.id} value={c.centerCode}>{c.centerCode}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              title="Delete this saved center"
+              className="h-8 w-8 inline-flex items-center justify-center rounded-md text-text-muted hover:text-danger hover:bg-danger/10"
+              onClick={() => {
+                const sel = document.querySelector<HTMLSelectElement>('.center-sel-v2');
+                const found = savedCenters.find((c) => c.centerCode === sel?.value);
+                if (found) deleteCenter(found.id);
+              }}
+            >
+              <TrashIcon width={14} height={14} />
+            </button>
           </div>
-        </div>
+        )}
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Center Code" required error={errors.centerCode}>
+          <Field label="Center Code" error={errors.centerCode}>
             <Input
               value={data.centerCode}
               onChange={(e) => set('centerCode', e.target.value.toUpperCase())}
@@ -172,34 +215,97 @@ export function InvoiceForm({
               placeholder="GGN_SEC50"
             />
           </Field>
-          <Field label="GST Number">
+          <Field label="Center Location">
+            <Input
+              value={data.centerLocation}
+              onChange={(e) => set('centerLocation', e.target.value)}
+              placeholder="e.g. Bengaluru, Mumbai, Delhi"
+            />
+          </Field>
+          <Field label="Full Address">
+            <Input
+              value={data.fullAddress}
+              onChange={(e) => set('fullAddress', e.target.value)}
+              placeholder="e.g. 12 MG Road, Bengaluru - 560001"
+            />
+          </Field>
+          <Field label="Email (optional)">
+            <Input
+              type="email"
+              value={data.centerEmail}
+              onChange={(e) => set('centerEmail', e.target.value)}
+              placeholder="center@shichidaindia.com"
+            />
+          </Field>
+          <Field label="Phone (optional)">
+            <Input
+              value={data.centerPhone}
+              onChange={(e) => set('centerPhone', e.target.value)}
+              placeholder="+91-XXXXX-XXXXX"
+            />
+          </Field>
+          <Field label="GST Number (optional)">
             <Input
               value={data.gstNumber}
               onChange={(e) => set('gstNumber', e.target.value)}
-              placeholder={COMPANY_GST}
+              placeholder="22AAAAA0000A1Z5"
             />
           </Field>
+        </div>
+
+        <div className="flex items-center gap-3 pt-1">
+          <Button type="button" variant="primary" onClick={saveCenter} className="text-sm">
+            Save Center
+          </Button>
+          {centerSaved
+            ? <span className="text-sm text-olive font-medium">✓ Saved!</span>
+            : <span className="text-xs text-text-muted">Save for quick selection next time</span>
+          }
+        </div>
+      </section>
+
+      {/* Bank Details */}
+      <section className="card p-5 space-y-4">
+        <h2 className="font-semibold">Bank Details</h2>
+        <div className="grid grid-cols-2 gap-3">
           <Field label="Bank Name">
             <Input
               value={data.bankName}
               onChange={(e) => set('bankName', e.target.value)}
-              placeholder="IDFC Bank"
+              placeholder="e.g. IDFC Bank"
             />
           </Field>
           <Field label="Account Number">
             <Input
               value={data.accountNumber}
               onChange={(e) => set('accountNumber', e.target.value)}
-              placeholder="10092938193"
+              placeholder="e.g. 10092938193"
             />
           </Field>
-          <Field label="IFSC Code" hint="Used in Payment Details section">
+          <Field label="IFSC Code">
             <Input
               value={data.ifscCode}
               onChange={(e) => set('ifscCode', e.target.value)}
-              placeholder="IDFB0020141"
+              placeholder="e.g. SBIN0001234"
             />
           </Field>
+          <Field label="UPI ID (optional)">
+            <Input
+              value={data.upiId}
+              onChange={(e) => set('upiId', e.target.value)}
+              placeholder="center@upi"
+            />
+          </Field>
+        </div>
+
+        <div className="flex items-center gap-3 pt-1">
+          <Button type="button" variant="primary" onClick={saveBankAccount} className="text-sm">
+            Save Bank Account
+          </Button>
+          {bankSaved
+            ? <span className="text-sm text-olive font-medium">✓ Saved!</span>
+            : <span className="text-xs text-text-muted">Save for quick selection next time</span>
+          }
         </div>
       </section>
 
@@ -207,7 +313,7 @@ export function InvoiceForm({
       <section className="card p-5 space-y-4">
         <h2 className="font-semibold">Student Details</h2>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Student Name" required error={errors.studentName}>
+          <Field label="Student Name" error={errors.studentName}>
             <Input
               value={data.studentName}
               onChange={(e) => set('studentName', e.target.value)}
@@ -215,7 +321,7 @@ export function InvoiceForm({
               placeholder="Testing 1"
             />
           </Field>
-          <Field label="Parent / Guardian" required error={errors.parentName}>
+          <Field label="Parent / Guardian" error={errors.parentName}>
             <Input
               value={data.parentName}
               onChange={(e) => set('parentName', e.target.value)}
@@ -248,18 +354,19 @@ export function InvoiceForm({
         </div>
       </section>
 
-      {/* Invoice Meta */}
+      {/* Invoice Details */}
       <section className="card p-5 space-y-4">
         <h2 className="font-semibold">Invoice Details</h2>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Invoice #" required error={errors.invoiceNumber}>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Invoice Number" error={errors.invoiceNumber}>
             <Input
               value={data.invoiceNumber}
               onChange={(e) => set('invoiceNumber', e.target.value)}
               invalid={!!errors.invoiceNumber}
+              placeholder="e.g. INV-1001"
             />
           </Field>
-          <Field label="Date" required error={errors.invoiceDate}>
+          <Field label="Invoice Date" error={errors.invoiceDate}>
             <Input
               type="date"
               value={data.invoiceDate}
@@ -267,7 +374,7 @@ export function InvoiceForm({
               invalid={!!errors.invoiceDate}
             />
           </Field>
-          <Field label="Due Date" required error={errors.dueDate}>
+          <Field label="Due Date" error={errors.dueDate}>
             <Input
               type="date"
               value={data.dueDate}
@@ -275,12 +382,32 @@ export function InvoiceForm({
               invalid={!!errors.dueDate}
             />
           </Field>
+          <Field label="GST %">
+            <Input
+              type="number"
+              min={0}
+              step={1}
+              value={data.gstPercent || ''}
+              onChange={(e) => set('gstPercent', Number(e.target.value) || 0)}
+              placeholder="0"
+            />
+          </Field>
+          <Field label="Debit Brought Forward (₹)">
+            <Input
+              type="number"
+              min={0}
+              step={1}
+              value={data.debitBroughtForward || ''}
+              onChange={(e) => set('debitBroughtForward', Number(e.target.value) || 0)}
+              placeholder="0"
+            />
+          </Field>
         </div>
       </section>
 
-      {/* Registration Details */}
+      {/* Monthly Sessions */}
       <section className="card p-5 space-y-4">
-        <h2 className="font-semibold">Registration Details</h2>
+        <h2 className="font-semibold">Monthly Sessions</h2>
 
         {/* Registration Fee */}
         <div className="rounded-lg border border-border bg-cream/40 p-4 space-y-2">
@@ -309,7 +436,7 @@ export function InvoiceForm({
             <p className="text-xs text-danger">{errors.sessionPeriod}</p>
           )}
           <div className="grid grid-cols-3 gap-3">
-            <Field label="Start Date" required>
+            <Field label="Start Date">
               <Input
                 type="date"
                 value={data.sessionFeeStart}
@@ -320,7 +447,7 @@ export function InvoiceForm({
                 invalid={!!errors.sessionPeriod}
               />
             </Field>
-            <Field label="End Date" required>
+            <Field label="End Date">
               <Input
                 type="date"
                 value={data.sessionFeeEnd}
@@ -331,21 +458,25 @@ export function InvoiceForm({
                 invalid={!!errors.sessionPeriod}
               />
             </Field>
-            <Field label="Amount (₹)" required error={errors.sessionFeeAmount}>
+            <Field label="Amount (₹)" error={errors.sessionFeeAmount}>
               <Input
                 type="number"
                 min={0}
                 step={1}
                 value={data.sessionFeeAmount || ''}
-                onChange={(e) => set('sessionFeeAmount', Number(e.target.value) || 0)}
+                onChange={(e) => set('sessionFeeAmount', Math.round(Number(e.target.value)) || 0)}
                 invalid={!!errors.sessionFeeAmount}
                 placeholder="44000"
               />
             </Field>
           </div>
         </div>
+      </section>
 
-        {/* Extra items */}
+      {/* Extra Charges */}
+      <section className="card p-5 space-y-4">
+        <h2 className="font-semibold">Extra Charges</h2>
+
         {data.extraItems.length > 0 && (
           <div className="space-y-2">
             <div className="grid grid-cols-[1fr_80px_140px_36px] gap-2 text-xs text-text-muted px-1">
@@ -398,7 +529,67 @@ export function InvoiceForm({
           onClick={() => set('extraItems', [...data.extraItems, newExtraItem()])}
           className="btn-dashed"
         >
-          + Add extra line item
+          + Add Extra Charge
+        </button>
+      </section>
+
+      {/* Deductions / Credits */}
+      <section className="card p-5 space-y-4">
+        <h2 className="font-semibold">Deductions / Credits</h2>
+
+        {data.deductions.length > 0 && (
+          <div className="space-y-2">
+            <div className="grid grid-cols-[1fr_80px_140px_36px] gap-2 text-xs text-text-muted px-1">
+              <div>Description</div>
+              <div>Qty</div>
+              <div>Amount (₹)</div>
+              <div />
+            </div>
+            <ul className="space-y-2">
+              {data.deductions.map((item) => (
+                <li
+                  key={item.id}
+                  className="grid grid-cols-[1fr_80px_140px_36px] gap-2 items-start"
+                >
+                  <Input
+                    value={item.description}
+                    onChange={(e) => updateDeduction(item.id, { description: e.target.value })}
+                    placeholder="Description"
+                  />
+                  <Input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={item.quantity}
+                    onChange={(e) => updateDeduction(item.id, { quantity: Number(e.target.value) || 1 })}
+                  />
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={item.amount || ''}
+                    onChange={(e) => updateDeduction(item.id, { amount: Number(e.target.value) || 0 })}
+                    placeholder="0"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeDeduction(item.id)}
+                    className="h-9 inline-flex items-center justify-center rounded-md text-text-muted hover:text-danger hover:bg-danger/10"
+                  >
+                    <TrashIcon width={16} height={16} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => set('deductions', [...data.deductions, newExtraItem()])}
+          className="btn-dashed"
+        >
+          + Add Deduction
         </button>
       </section>
 

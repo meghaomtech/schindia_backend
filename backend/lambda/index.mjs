@@ -48,14 +48,21 @@ export const handler = async (event) => {
       const body = JSON.parse(event.body || '{}');
       if (!body.invoiceNumber) return err(400, 'invoiceNumber is required');
 
+      const regFee = body.registrationFee || 0;
+      const sessionFee = body.sessionFeeAmount || 0;
+      const extrasTotal = (body.extraItems || []).reduce((s, e) => s + e.amount * e.quantity, 0);
+      const deductionsTotal = (body.deductions || []).reduce((s, e) => s + e.amount * e.quantity, 0);
+      const subtotal = regFee + sessionFee + extrasTotal - deductionsTotal;
+      const gstPercent = body.gstPercent || 0;
+      const gstAmount = Math.round(subtotal * gstPercent / 100);
+      const debitBroughtForward = body.debitBroughtForward || 0;
+      const totalAmount = subtotal + gstAmount + debitBroughtForward;
+
       const item = {
         ...body,
         createdAt: body.createdAt || new Date().toISOString(),
-        status: 'sent',
-        totalAmount:
-          (body.registrationFee || 0) +
-          (body.sessionFeeAmount || 0) +
-          (body.extraItems || []).reduce((s, e) => s + e.amount * e.quantity, 0),
+        status: 'generated',
+        totalAmount,
       };
 
       await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
