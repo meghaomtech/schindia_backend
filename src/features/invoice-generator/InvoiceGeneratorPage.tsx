@@ -50,13 +50,17 @@ export function InvoiceGeneratorPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState<Step>('form');
   const [formData, setFormData] = useState<InvoiceFormData>(defaultFormData);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  function handleGenerate() {
-    // Save invoice to local history
+  async function handleGenerate() {
+    setSaveError(null);
     saveInvoiceLocally(formData);
-    // Also save to AWS if configured
     if (isApiConfigured()) {
-      saveInvoice(formData).catch((e) => console.error('API save failed:', e));
+      try {
+        await saveInvoice(formData);
+      } catch (e) {
+        setSaveError((e as Error).message);
+      }
     }
     setStep('preview');
   }
@@ -72,15 +76,25 @@ export function InvoiceGeneratorPage() {
   }
 
   return (
-    <InvoicePreview
-      data={formData}
-      sent={false}
-      onBack={() => setStep('form')}
-      onCreateNew={() => {
-        setFormData(defaultFormData());
-        setStep('form');
-      }}
-      onViewHistory={() => navigate('/admin/invoices/history')}
-    />
+    <>
+      {saveError && (
+        <div className="max-w-2xl mx-auto px-6 pt-4">
+          <div className="rounded-md bg-danger/10 border border-danger/20 text-danger text-sm px-4 py-2">
+            ⚠ Invoice saved locally but failed to sync to cloud: {saveError}
+          </div>
+        </div>
+      )}
+      <InvoicePreview
+        data={formData}
+        sent={false}
+        onBack={() => { setStep('form'); setSaveError(null); }}
+        onCreateNew={() => {
+          setFormData(defaultFormData());
+          setStep('form');
+          setSaveError(null);
+        }}
+        onViewHistory={() => navigate('/admin/invoices/history')}
+      />
+    </>
   );
 }
