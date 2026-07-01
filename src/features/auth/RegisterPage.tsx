@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
 import { useAuth } from './AuthContext';
@@ -7,8 +7,8 @@ import { AuthLayout } from './AuthLayout';
 import { validateSignup } from './validateAuth';
 import type { ValidationError } from '@/lib/types';
 
-export function RootSetupPage() {
-  const { setupRoot, isRootSetup } = useAuth();
+export function RegisterPage() {
+  const { register, isAuthenticated } = useAuth();
   const navigate = useNavigate();
 
   const [name, setName] = useState('');
@@ -24,10 +24,9 @@ export function RootSetupPage() {
   const passwordRef = useRef<HTMLInputElement>(null);
   const confirmRef = useRef<HTMLInputElement>(null);
 
-  // If root is already set up, redirect to login
-  if (isRootSetup) {
-    navigate('/login', { replace: true });
-    return null;
+  // Redirect if already authenticated
+  if (isAuthenticated) {
+    return <Navigate to="/admin" replace />;
   }
 
   function getError(field: string) {
@@ -56,7 +55,7 @@ export function RootSetupPage() {
 
     setLoading(true);
     try {
-      await setupRoot(name, email, password);
+      await register(name, email, password);
       navigate('/admin', { replace: true });
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
@@ -67,21 +66,20 @@ export function RootSetupPage() {
 
   return (
     <AuthLayout
-      title="Set up Root Admin"
+      title="Create an account"
       footer={
-        <span className="text-text-dim text-xs">
-          This is a one-time setup. The root admin will manage all access approvals.
+        <span>
+          Already have an account?{' '}
+          <Link to="/login" className="text-olive font-medium hover:underline">
+            Log in
+          </Link>
+          {' · '}
+          <Link to="/request-access" className="text-olive font-medium hover:underline">
+            Request access
+          </Link>
         </span>
       }
     >
-      <div className="mb-4 p-3 rounded-lg bg-olive/5 border border-olive/20">
-        <p className="text-sm text-text-muted">
-          <span className="font-medium text-olive">First-time setup:</span>{' '}
-          Create the root admin account. This account will have full access and will approve
-          all future admin access requests.
-        </p>
-      </div>
-
       <form onSubmit={handleSubmit} noValidate aria-busy={loading}>
         {formError && (
           <div
@@ -108,7 +106,7 @@ export function RootSetupPage() {
               aria-invalid={!!getError('name')}
               aria-describedby={getError('name') ? 'name-error' : undefined}
               disabled={loading}
-              placeholder="Root Admin Name"
+              placeholder="John Doe"
               autoComplete="name"
             />
           </Field>
@@ -128,7 +126,7 @@ export function RootSetupPage() {
               aria-invalid={!!getError('email')}
               aria-describedby={getError('email') ? 'email-error' : undefined}
               disabled={loading}
-              placeholder="admin@shichida.in"
+              placeholder="you@example.com"
               autoComplete="email"
             />
           </Field>
@@ -186,7 +184,7 @@ export function RootSetupPage() {
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
             </svg>
           ) : (
-            'Create Root Admin'
+            'Register'
           )}
         </Button>
       </form>

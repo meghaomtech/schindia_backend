@@ -30,10 +30,9 @@ interface AuthContextValue {
   user: AuthUser | null;
   isAuthenticated: boolean;
   isRoot: boolean;
-  isRootSetup: boolean;
   login: (email: string, password: string) => Promise<void>;
-  signup: (name: string, email: string, password: string) => Promise<{ status: 'pending' | 'success' }>;
-  setupRoot: (name: string, email: string, password: string) => Promise<void>;
+  register: (name: string, email: string, password: string) => Promise<void>;
+  requestAccess: (name: string, email: string, password: string) => Promise<{ status: 'pending' }>;
   logout: () => void;
   getAccessRequests: () => AccessRequest[];
   approveRequest: (userId: string) => void;
@@ -42,7 +41,6 @@ interface AuthContextValue {
 
 const AUTH_USER_KEY = 'shichida_auth_user';
 const AUTH_USERS_KEY = 'shichida_auth_users';
-const ROOT_SETUP_KEY = 'shichida_root_setup';
 
 // WARNING: Java-style hashCode — not one-way and has massive collision risk.
 // This is only acceptable for localStorage-only demo purposes.
@@ -79,15 +77,10 @@ function getPersistedUser(): AuthUser | null {
   }
 }
 
-function isRootConfigured(): boolean {
-  return localStorage.getItem(ROOT_SETUP_KEY) === 'true';
-}
-
 const AuthCtx = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => getPersistedUser());
-  const [rootSetup, setRootSetup] = useState(() => isRootConfigured());
 
   const login = useCallback(async (email: string, password: string) => {
     // Simulate network delay
@@ -115,13 +108,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(authUser);
   }, []);
 
-  const signup = useCallback(async (name: string, email: string, password: string): Promise<{ status: 'pending' | 'success' }> => {
+  const register = useCallback(async (name: string, email: string, password: string): Promise<void> => {
     // Simulate network delay
     await new Promise((r) => setTimeout(r, 500));
 
-    if (!isRootConfigured()) {
-      throw new Error('Root admin has not been set up yet. Please set up the root admin first.');
+    const users = getStoredUsers();
+    const exists = users.some((u) => u.email.toLowerCase() === email.toLowerCase());
+
+    if (exists) {
+      throw new Error('An account with this email already exists');
     }
+
+    const newUser: StoredUser = {
+      id: uid('usr'),
+      name,
+      email,
+      passwordHash: simpleHash(password),
+      role: 'admin',
+      status: 'approved',
+      requestedAt: new Date().toISOString(),
+    };
+
+    saveStoredUsers([...users, newUser]);
+
+    // Auto-login after registration
+    const authUser: AuthUser = { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role };
+    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(authUser));
+    setUser(authUser);
+  }, []);
+
+  const requestAccess = useCallback(async (name: string, email: string, password: string): Promise<{ status: 'pending' }> => {
+    // Simulate network delay
+    await new Promise((r) => setTimeout(r, 500));
 
     const users = getStoredUsers();
     const exists = users.some((u) => u.email.toLowerCase() === email.toLowerCase());
@@ -144,40 +162,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Don't auto-login — user must wait for root approval
     return { status: 'pending' };
-  }, []);
-
-  const setupRoot = useCallback(async (name: string, email: string, password: string) => {
-    // Simulate network delay
-    await new Promise((r) => setTimeout(r, 500));
-
-    if (isRootConfigured()) {
-      throw new Error('Root admin is already configured.');
-    }
-
-    const users = getStoredUsers();
-    const exists = users.some((u) => u.email.toLowerCase() === email.toLowerCase());
-
-    if (exists) {
-      throw new Error('An account with this email already exists');
-    }
-
-    const rootUser: StoredUser = {
-      id: uid('usr'),
-      name,
-      email,
-      passwordHash: simpleHash(password),
-      role: 'root',
-      status: 'approved',
-      requestedAt: new Date().toISOString(),
-    };
-
-    saveStoredUsers([...users, rootUser]);
-    localStorage.setItem(ROOT_SETUP_KEY, 'true');
-    setRootSetup(true);
-
-    const authUser: AuthUser = { id: rootUser.id, name: rootUser.name, email: rootUser.email, role: 'root' };
-    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(authUser));
-    setUser(authUser);
   }, []);
 
   const logout = useCallback(() => {
@@ -219,16 +203,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       isAuthenticated: user !== null,
       isRoot: user?.role === 'root',
-      isRootSetup: rootSetup,
       login,
-      signup,
-      setupRoot,
+      register,
+      requestAccess,
       logout,
       getAccessRequests,
       approveRequest,
       rejectRequest,
     }),
-    [user, rootSetup, login, signup, setupRoot, logout, getAccessRequests, approveRequest, rejectRequest]
+    [user, login, register, requestAccess, logout, getAccessRequests, approveRequest, rejectRequest]
   );
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;

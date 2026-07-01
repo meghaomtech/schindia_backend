@@ -8,7 +8,7 @@ import { validateSignup } from './validateAuth';
 import type { ValidationError } from '@/lib/types';
 
 export function SignupPage() {
-  const { signup, isAuthenticated, isRootSetup } = useAuth();
+  const { requestAccess, isAuthenticated } = useAuth();
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -23,11 +23,6 @@ export function SignupPage() {
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
   const confirmRef = useRef<HTMLInputElement>(null);
-
-  // If root is not set up yet, redirect to root setup
-  if (!isRootSetup) {
-    return <Navigate to="/setup" replace />;
-  }
 
   // Redirect if already authenticated
   if (isAuthenticated) {
@@ -60,7 +55,7 @@ export function SignupPage() {
 
     setLoading(true);
     try {
-      const result = await signup(name, email, password);
+      const result = await requestAccess(name, email, password);
       if (result.status === 'pending') {
         setSubmitted(true);
       }
@@ -109,6 +104,10 @@ export function SignupPage() {
           Already have an account?{' '}
           <Link to="/login" className="text-olive font-medium hover:underline">
             Log in
+          </Link>
+          {' · '}
+          <Link to="/register" className="text-olive font-medium hover:underline">
+            Register
           </Link>
         </span>
       }
