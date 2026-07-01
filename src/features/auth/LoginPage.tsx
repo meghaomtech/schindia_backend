@@ -8,7 +8,7 @@ import { validateLogin } from './validateAuth';
 import type { ValidationError } from '@/lib/types';
 
 export function LoginPage() {
-  const { login, isAuthenticated, isRootSetup } = useAuth();
+  const { login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const from = (location.state && typeof location.state === 'object' && 'from' in location.state
@@ -23,11 +23,6 @@ export function LoginPage() {
 
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
-
-  // If root is not set up yet, redirect to root setup
-  if (!isRootSetup) {
-    return <Navigate to="/setup" replace />;
-  }
 
   // Redirect if already authenticated
   if (isAuthenticated) {
@@ -74,7 +69,11 @@ export function LoginPage() {
       footer={
         <span>
           Don't have an account?{' '}
-          <Link to="/signup" className="text-olive font-medium hover:underline">
+          <Link to="/register" className="text-olive font-medium hover:underline">
+            Register
+          </Link>
+          {' · '}
+          <Link to="/request-access" className="text-olive font-medium hover:underline">
             Request access
           </Link>
         </span>

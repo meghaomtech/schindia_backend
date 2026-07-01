@@ -3,12 +3,13 @@ import {
   Navigate,
   Route,
   Routes,
+  useMatch,
 } from 'react-router-dom';
 import { StoreProvider, useStore } from '@/store/store';
 import { AuthProvider, useAuth } from '@/features/auth/AuthContext';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { SignupPage } from '@/features/auth/SignupPage';
-import { RootSetupPage } from '@/features/auth/RootSetupPage';
+import { RegisterPage } from '@/features/auth/RegisterPage';
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute';
 import { AccessRequestsPage } from '@/features/auth/AccessRequestsPage';
 import { LandingPage } from '@/features/landing/LandingPage';
@@ -186,9 +187,10 @@ export default function App() {
       <StoreProvider>
         <Routes>
           <Route path="/" element={<LandingPage />} />
-          <Route path="/setup" element={<RootSetupPage />} />
           <Route path="/login" element={<LoginPage />} />
-          <Route path="/signup" element={<SignupPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          <Route path="/request-access" element={<SignupPage />} />
+          <Route path="/signup" element={<Navigate to="/request-access" replace />} />
           <Route path="/admin/*" element={
             <ProtectedRoute>
               <AdminLayout />
