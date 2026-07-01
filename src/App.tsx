@@ -4,7 +4,13 @@ import {
   Route,
   Routes,
 } from 'react-router-dom';
-import { StoreProvider } from '@/store/store';
+import { StoreProvider, useStore } from '@/store/store';
+import { AuthProvider, useAuth } from '@/features/auth/AuthContext';
+import { LoginPage } from '@/features/auth/LoginPage';
+import { SignupPage } from '@/features/auth/SignupPage';
+import { RootSetupPage } from '@/features/auth/RootSetupPage';
+import { ProtectedRoute } from '@/features/auth/ProtectedRoute';
+import { AccessRequestsPage } from '@/features/auth/AccessRequestsPage';
 import { LandingPage } from '@/features/landing/LandingPage';
 import { CentresPage } from '@/features/centres/CentresPage';
 import { CentreLayout } from '@/features/centres/CentreLayout';
@@ -14,12 +20,34 @@ import { CentreTimetableRoute } from '@/features/centres/CentreTimetableRoute';
 import { CentreChildrenRoute } from '@/features/centres/CentreChildrenRoute';
 import { CentreRolesRoute } from '@/features/centres/CentreRolesRoute';
 import { InfoPage } from '@/features/info/InfoPage';
-import { InvoiceGeneratorPage } from '@/features/invoice-generator/InvoiceGeneratorPage';
-import { InvoiceHistoryPage } from '@/features/invoice-generator/InvoiceHistoryPage';
-import { PaymentsPage } from '@/features/invoice-generator/PaymentsPage';
-import { ReceiptIcon } from '@/components/ui/icons';
+import {
+  AccessRequestsIcon,
+  CentresIcon,
+  ChildrenIcon,
+  InfoIcon,
+  LogoutIcon,
+  RolesIcon,
+  SessionsIcon,
+  TimetableIcon,
+} from '@/components/ui/icons';
+import type { ComponentType, SVGProps } from 'react';
+
+type IconType = ComponentType<SVGProps<SVGSVGElement>>;
+
+const CENTRE_SUBNAV: { to: (id: string) => string; label: string; Icon: IconType }[] = [
+  { to: (id) => `/admin/centres/${id}/sessions`, label: 'Sessions', Icon: SessionsIcon },
+  { to: (id) => `/admin/centres/${id}/timetable`, label: 'Timetable', Icon: TimetableIcon },
+  { to: (id) => `/admin/centres/${id}/children`, label: 'Children', Icon: ChildrenIcon },
+  { to: (id) => `/admin/centres/${id}/roles`, label: 'Roles', Icon: RolesIcon },
+];
 
 function Sidebar() {
+  const centreMatch = useMatch('/admin/centres/:centreId/*');
+  const openCentreId = centreMatch?.params.centreId ?? null;
+  const { centres } = useStore();
+  const { isRoot, user, logout } = useAuth();
+  const openCentre = centres.find((c) => c.id === openCentreId) ?? null;
+
   return (
     <aside className="w-56 shrink-0 border-r border-border bg-bg-elev p-4 flex flex-col">
       <div className="mb-6 px-2">
@@ -76,8 +104,48 @@ function Sidebar() {
           <ReceiptIcon className="shrink-0" />
           <span>Payments</span>
         </NavLink>
+
+        {/* Root-only: Access Requests */}
+        {isRoot && (
+          <NavLink
+            to="/admin/access-requests"
+            className={({ isActive }) =>
+              [
+                'flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium',
+                isActive
+                  ? 'bg-olive/10 text-olive'
+                  : 'text-text-muted hover:bg-beige hover:text-text',
+              ].join(' ')
+            }
+          >
+            <AccessRequestsIcon className="shrink-0" />
+            <span>Access Requests</span>
+          </NavLink>
+        )}
       </nav>
-      <div className="text-xs text-text-dim px-2 pt-3 border-t border-border">
+
+      {/* User info & logout */}
+      <div className="border-t border-border pt-3 mt-2">
+        <div className="flex items-center gap-2 px-2 mb-2">
+          <div className="w-7 h-7 rounded-full bg-olive/10 flex items-center justify-center text-xs font-semibold text-olive shrink-0">
+            {user?.name?.charAt(0).toUpperCase() ?? 'U'}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-charcoal truncate">{user?.name}</p>
+            <p className="text-[10px] text-text-dim truncate">
+              {isRoot ? 'Root Admin' : 'Admin'}
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={logout}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm text-text-muted hover:bg-beige hover:text-text w-full transition-colors"
+        >
+          <LogoutIcon className="shrink-0" width={16} height={16} />
+          <span>Logout</span>
+        </button>
+      </div>
+      <div className="text-xs text-text-dim px-2 pt-3 border-t border-border mt-2">
         Phase 1 · v0.1
       </div>
     </aside>
@@ -104,7 +172,8 @@ function AdminLayout() {
           <Route path="invoices" element={<Navigate to="/admin/invoices/generate" replace />} />
           <Route path="payments" element={<PaymentsPage />} />
           <Route path="info" element={<InfoPage />} />
-          <Route path="*" element={<Navigate to="/admin/invoices/generate" replace />} />
+          <Route path="access-requests" element={<AccessRequestsPage />} />
+          <Route path="*" element={<Navigate to="/admin/centres" replace />} />
         </Routes>
       </main>
     </div>
@@ -113,12 +182,21 @@ function AdminLayout() {
 
 export default function App() {
   return (
-    <StoreProvider>
-      <Routes>
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/admin/*" element={<AdminLayout />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </StoreProvider>
+    <AuthProvider>
+      <StoreProvider>
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/setup" element={<RootSetupPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
+          <Route path="/admin/*" element={
+            <ProtectedRoute>
+              <AdminLayout />
+            </ProtectedRoute>
+          } />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </StoreProvider>
+    </AuthProvider>
   );
 }
