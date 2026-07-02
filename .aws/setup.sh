@@ -2,8 +2,8 @@
 # .aws/setup.sh — ONE-TIME AWS infrastructure setup for Shichida Backend
 #
 # This creates:
-#   - Secrets Manager entries (DB creds, Django secret key, CORS, etc.)
-#   - CloudFormation stack (RDS + ECS Fargate + ALB + ECR)
+#   - Secrets Manager entries (Django secret key, CORS, allowed hosts)
+#   - CloudFormation stack (DynamoDB + ECS Fargate + ALB + EFS + ECR)
 #   - GitHub OIDC trust + deploy role
 #
 # Usage:
@@ -44,12 +44,7 @@ create_secret() {
   fi
 }
 
-# Prompt for DB password
-read -sp "  Enter database password: " DB_PASSWORD
-echo ""
-
 create_secret "shichida/django-secret-key" "$DJANGO_KEY"
-create_secret "shichida/db-credentials" "{\"dbname\":\"shichida\",\"username\":\"shichida_user\",\"password\":\"$DB_PASSWORD\",\"host\":\"TO_BE_UPDATED_AFTER_RDS_CREATION\"}"
 create_secret "shichida/allowed-hosts" "api.shichida.in,localhost"
 create_secret "shichida/cors-origins" "https://admin.shichida.in,http://localhost:5173,http://localhost:3000"
 
@@ -74,7 +69,7 @@ echo "      Subnets: $SUBNET_IDS"
 
 # ── 3. Deploy CloudFormation ──────────────────────────────────────────
 echo ""
-echo "[3/4] Deploying CloudFormation stack (this takes 10-15 minutes)..."
+echo "[3/4] Deploying CloudFormation stack (this takes 5-10 minutes)..."
 echo "      Stack: shichida-backend-infra"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -85,7 +80,6 @@ aws cloudformation deploy \
   --parameter-overrides \
     "VpcId=$VPC_ID" \
     "SubnetIds=$SUBNET_IDS" \
-    "DBPassword=$DB_PASSWORD" \
   --capabilities CAPABILITY_NAMED_IAM \
   --region "$REGION" \
   --no-fail-on-empty-changeset
@@ -93,19 +87,14 @@ aws cloudformation deploy \
 # Get outputs
 ALB_URL=$(aws cloudformation describe-stacks --stack-name shichida-backend-infra \
   --query "Stacks[0].Outputs[?OutputKey=='ALBUrl'].OutputValue" --output text --region "$REGION")
-RDS_HOST=$(aws cloudformation describe-stacks --stack-name shichida-backend-infra \
-  --query "Stacks[0].Outputs[?OutputKey=='RDSEndpoint'].OutputValue" --output text --region "$REGION")
 ECR_URI=$(aws cloudformation describe-stacks --stack-name shichida-backend-infra \
   --query "Stacks[0].Outputs[?OutputKey=='ECRRepositoryUri'].OutputValue" --output text --region "$REGION")
+EFS_ID=$(aws cloudformation describe-stacks --stack-name shichida-backend-infra \
+  --query "Stacks[0].Outputs[?OutputKey=='EFSFileSystemId'].OutputValue" --output text --region "$REGION")
 
-# Update DB host in secrets
-aws secretsmanager put-secret-value --secret-id "shichida/db-credentials" \
-  --secret-string "{\"dbname\":\"shichida\",\"username\":\"shichida_user\",\"password\":\"$DB_PASSWORD\",\"host\":\"$RDS_HOST\"}" \
-  --region "$REGION" > /dev/null
-
-echo "      ALB URL: $ALB_URL"
-echo "      RDS Host: $RDS_HOST"
-echo "      ECR URI: $ECR_URI"
+echo "      ALB URL : $ALB_URL"
+echo "      ECR URI : $ECR_URI"
+echo "      EFS ID  : $EFS_ID"
 
 # ── 4. GitHub OIDC + Deploy Role ──────────────────────────────────────
 echo ""
@@ -197,9 +186,17 @@ cat <<SUMMARY
   ✅  AWS Infrastructure Ready!
 
   API URL (ALB)        : $ALB_URL
-  Database (RDS)       : $RDS_HOST
   Container Registry   : $ECR_URI
+  EFS (SQLite store)   : $EFS_ID
   Deploy Role          : $DEPLOY_ROLE_ARN
+
+  DynamoDB tables provisioned by CloudFormation:
+    - ShichidaInvoices
+    - ShichidaCenters
+    - ShichidaChildren
+    - ShichidaUsers
+    - ShichidaCentresTable
+    - ShichidaRoles
 
   ─── Add these GitHub Secrets ──────────────────────────────
 
@@ -214,8 +211,8 @@ cat <<SUMMARY
      docker build -t $ECR_URI:latest .
      docker push $ECR_URI:latest
 
-  2. Run migrations:
-     (happens automatically via GitHub Actions)
+  2. Migrations run automatically in the container on startup
+     (SQLite file lives at /data/db.sqlite3 on EFS)
 
   3. Create root admin (one-time):
      aws ecs run-task --cluster shichida-cluster \\

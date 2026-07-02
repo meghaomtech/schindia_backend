@@ -159,7 +159,10 @@ def me(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def change_password(request):
-    """Change the current user's password."""
+    """
+    Change the current user's password.
+    Blacklists all existing refresh tokens so old JWTs cannot be reused.
+    """
     old_password = request.data.get('old_password')
     new_password = request.data.get('new_password')
 
@@ -177,6 +180,7 @@ def change_password(request):
 
     from django.contrib.auth.password_validation import validate_password
     from django.core.exceptions import ValidationError
+    from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
 
     try:
         validate_password(new_password, request.user)
@@ -188,7 +192,14 @@ def change_password(request):
 
     request.user.set_password(new_password)
     request.user.save(update_fields=['password'])
-    return Response({'detail': 'Password changed successfully.'})
+
+    # Blacklist all outstanding refresh tokens for this user so old JWTs
+    # cannot be used after a password change.
+    outstanding_tokens = OutstandingToken.objects.filter(user=request.user)
+    for token in outstanding_tokens:
+        BlacklistedToken.objects.get_or_create(token=token)
+
+    return Response({'detail': 'Password changed successfully. Please log in again.'})
 
 
 @api_view(['GET'])

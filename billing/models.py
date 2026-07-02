@@ -87,6 +87,9 @@ class InvoiceExtraItem(models.Model):
     quantity = models.PositiveIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        ordering = ['created_at']
+
     def __str__(self):
         return f"Extra: {self.description} x{self.quantity} @ {self.amount}"
 
@@ -99,6 +102,9 @@ class InvoiceDeduction(models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     quantity = models.PositiveIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
 
     def __str__(self):
         return f"Deduction: {self.description} x{self.quantity} @ {self.amount}"

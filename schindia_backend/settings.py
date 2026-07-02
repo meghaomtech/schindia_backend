@@ -1,18 +1,28 @@
 """
 Django settings for schindia_backend project.
-Supports local development (sqlite) and AWS production (RDS PostgreSQL).
+Uses SQLite for all environments (local dev and AWS ECS via EFS mount).
+DynamoDB is used alongside Django via boto3 for billing/invoices data.
+
+DJANGO_ENV controls behaviour:
+  development  — local machine, SQLite, no AWS services required
+  dev          — AWS ECS dev stack, ShichidaInvoices-dev, shichida-dev S3 bucket
+  production   — AWS ECS prod stack, ShichidaInvoices-prod, shichida-prod S3 bucket
 """
 
 import os
 from pathlib import Path
 from datetime import timedelta
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Environment
+# ── Environment ──────────────────────────────────────────────────────────────
+# Possible values: development | dev | production
 DJANGO_ENV = os.environ.get('DJANGO_ENV', 'development')
-IS_PRODUCTION = DJANGO_ENV == 'production'
+
+IS_LOCAL       = DJANGO_ENV == 'development'
+IS_DEV         = DJANGO_ENV == 'dev'
+IS_PRODUCTION  = DJANGO_ENV == 'production'
+IS_AWS         = IS_DEV or IS_PRODUCTION   # any deployed environment
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get(
@@ -84,15 +94,11 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'schindia_backend.wsgi.application'
 
-# Database
+# Database — always SQLite; path overridden via DJANGO_DB_PATH in production (EFS mount)
 DATABASES = {
     'default': {
-        'ENGINE': os.environ.get('DB_ENGINE', 'django.db.backends.sqlite3'),
-        'NAME': os.environ.get('DB_NAME', BASE_DIR / 'db.sqlite3'),
-        'USER': os.environ.get('DB_USER', ''),
-        'PASSWORD': os.environ.get('DB_PASSWORD', ''),
-        'HOST': os.environ.get('DB_HOST', ''),
-        'PORT': os.environ.get('DB_PORT', ''),
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': os.environ.get('DJANGO_DB_PATH', BASE_DIR / 'db.sqlite3'),
     }
 }
 
@@ -169,51 +175,91 @@ CORS_ALLOWED_ORIGINS = os.environ.get(
 CORS_ALLOW_CREDENTIALS = True
 
 # ────────────────────────────────────────────────────────────────────────
-# AWS Configuration (active in production)
+# AWS — region (shared)
 # ────────────────────────────────────────────────────────────────────────
 
 AWS_REGION = os.environ.get('AWS_REGION', 'ap-south-1')
 
-# S3 Storage (for file uploads — future)
-AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_S3_BUCKET', '')
-AWS_S3_REGION_NAME = AWS_REGION
-AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com' if AWS_STORAGE_BUCKET_NAME else None
-AWS_DEFAULT_ACL = None
-AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
+# ────────────────────────────────────────────────────────────────────────
+# DynamoDB — table names are environment-specific so dev and prod data
+# never share a table.
+#
+#   dev   →  ShichidaInvoices-dev,  ShichidaCenters-dev,  ...
+#   prod  →  ShichidaInvoices-prod, ShichidaCenters-prod, ...
+#   local →  env var or DynamoDB Local via DYNAMODB_ENDPOINT
+# ────────────────────────────────────────────────────────────────────────
 
-if IS_PRODUCTION and AWS_STORAGE_BUCKET_NAME:
-    # Use S3 for static files in production
-    STATICFILES_STORAGE = 'storages.backends.s3boto3.S3StaticStorage'
-    STATIC_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/static/'
-    # Media files
-    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+DYNAMODB_REGION   = os.environ.get('DYNAMODB_REGION', AWS_REGION)
+# Set to http://localhost:8001 to use DynamoDB Local in development
+DYNAMODB_ENDPOINT = os.environ.get('DYNAMODB_ENDPOINT', None)
 
-# SES (email sending)
-AWS_SES_SENDER = os.environ.get('AWS_SES_SENDER', 'noreply@shichida.in')
-if IS_PRODUCTION:
-    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-    EMAIL_HOST = f'email-smtp.{AWS_REGION}.amazonaws.com'
-    EMAIL_PORT = 587
-    EMAIL_USE_TLS = True
-    EMAIL_HOST_USER = os.environ.get('AWS_SES_SMTP_USER', '')
-    EMAIL_HOST_PASSWORD = os.environ.get('AWS_SES_SMTP_PASSWORD', '')
-    DEFAULT_FROM_EMAIL = AWS_SES_SENDER
+# Table names — injected by ECS task definition for AWS envs,
+# fall back to sensible local defaults.
+_DDB_SUFFIX = f'-{DJANGO_ENV}' if IS_AWS else '-local'
+
+DYNAMODB_INVOICES_TABLE  = os.environ.get('DYNAMODB_INVOICES_TABLE',  f'ShichidaInvoices{_DDB_SUFFIX}')
+DYNAMODB_CENTERS_TABLE   = os.environ.get('DYNAMODB_CENTERS_TABLE',   f'ShichidaCenters{_DDB_SUFFIX}')
+DYNAMODB_CHILDREN_TABLE  = os.environ.get('DYNAMODB_CHILDREN_TABLE',  f'ShichidaChildren{_DDB_SUFFIX}')
+DYNAMODB_USERS_TABLE     = os.environ.get('DYNAMODB_USERS_TABLE',     f'ShichidaUsers{_DDB_SUFFIX}')
+DYNAMODB_ROLES_TABLE     = os.environ.get('DYNAMODB_ROLES_TABLE',     f'ShichidaRoles{_DDB_SUFFIX}')
 
 # ────────────────────────────────────────────────────────────────────────
-# Production security settings
+# S3 — separate bucket per environment so dev uploads never land in prod.
+#
+#   dev   →  shichida-uploads-dev
+#   prod  →  shichida-uploads-prod
+#   local →  not used (no S3 storage locally)
+# ────────────────────────────────────────────────────────────────────────
+
+_S3_DEFAULT_BUCKET = f'shichida-uploads-{DJANGO_ENV}' if IS_AWS else ''
+
+AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_S3_BUCKET', _S3_DEFAULT_BUCKET)
+AWS_S3_REGION_NAME      = AWS_REGION
+AWS_DEFAULT_ACL         = None
+AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
+
+if IS_AWS and AWS_STORAGE_BUCKET_NAME:
+    AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
+    # Static files served from environment-specific S3 bucket
+    STATICFILES_STORAGE  = 'storages.backends.s3boto3.S3StaticStorage'
+    STATIC_URL           = f'https://{AWS_S3_CUSTOM_DOMAIN}/static/'
+    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+
+# ────────────────────────────────────────────────────────────────────────
+# SES — emails sent from an environment-specific sender address so dev
+# test emails are clearly distinguishable from production emails.
+#
+#   dev   →  dev@shichida.in
+#   prod  →  noreply@shichida.in
+# ────────────────────────────────────────────────────────────────────────
+
+_SES_SENDER_DEFAULT = 'dev@shichida.in' if IS_DEV else 'noreply@shichida.in'
+AWS_SES_SENDER = os.environ.get('AWS_SES_SENDER', _SES_SENDER_DEFAULT)
+
+if IS_AWS:
+    EMAIL_BACKEND       = 'django.core.mail.backends.smtp.EmailBackend'
+    EMAIL_HOST          = f'email-smtp.{AWS_REGION}.amazonaws.com'
+    EMAIL_PORT          = 587
+    EMAIL_USE_TLS       = True
+    EMAIL_HOST_USER     = os.environ.get('AWS_SES_SMTP_USER', '')
+    EMAIL_HOST_PASSWORD = os.environ.get('AWS_SES_SMTP_PASSWORD', '')
+    DEFAULT_FROM_EMAIL  = AWS_SES_SENDER
+
+# ────────────────────────────────────────────────────────────────────────
+# Production-only security hardening
+# (dev stack on AWS stays permissive for easier debugging)
 # ────────────────────────────────────────────────────────────────────────
 
 if IS_PRODUCTION:
     DEBUG = False
-    SECURE_SSL_REDIRECT = True
-    SECURE_HSTS_SECONDS = 31536000
+    SECURE_SSL_REDIRECT            = True
+    SECURE_HSTS_SECONDS            = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = True
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-
-    # Remove browsable API in production
+    SECURE_HSTS_PRELOAD            = True
+    SESSION_COOKIE_SECURE          = True
+    CSRF_COOKIE_SECURE             = True
+    SECURE_PROXY_SSL_HEADER        = ('HTTP_X_FORWARDED_PROTO', 'https')
+    # Remove browsable API renderer in production
     REST_FRAMEWORK['DEFAULT_RENDERER_CLASSES'] = (
         'djangorestframework_camel_case.render.CamelCaseJSONRenderer',
     )
@@ -239,7 +285,7 @@ LOGGING = {
     },
     'root': {
         'handlers': ['console'],
-        'level': 'INFO' if IS_PRODUCTION else 'DEBUG',
+        'level': 'INFO' if IS_AWS else 'DEBUG',
     },
     'loggers': {
         'django': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
