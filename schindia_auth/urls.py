@@ -6,6 +6,7 @@ urlpatterns = [
     # Auth endpoints matching frontend expectations
     path('register/', views.register, name='register'),
     path('request-access/', views.request_access, name='request-access'),
+    path('request-root-access/', views.request_root_access, name='request-root-access'),
     path('login/', views.login_view, name='login'),
     path('refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path('verify/', TokenVerifyView.as_view(), name='token-verify'),
