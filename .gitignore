@@ -36,3 +36,7 @@ Thumbs.db
 
 # Docker
 postgres_data/
+
+# AWS
+.aws/credentials
+*.zip

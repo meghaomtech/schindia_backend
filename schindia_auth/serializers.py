@@ -17,11 +17,14 @@ class UserSerializer(serializers.ModelSerializer):
         return obj.get_full_name()
 
 
-class SetupRootSerializer(serializers.Serializer):
+class RegisterSerializer(serializers.Serializer):
+    """
+    For POST /api/auth/register/
+    Creates user with status=approved and returns JWT immediately.
+    """
+    name = serializers.CharField(max_length=300)
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, validators=[validate_password])
-    first_name = serializers.CharField(max_length=150)
-    last_name = serializers.CharField(max_length=150)
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
@@ -29,11 +32,14 @@ class SetupRootSerializer(serializers.Serializer):
         return value
 
 
-class SignupSerializer(serializers.Serializer):
+class RequestAccessSerializer(serializers.Serializer):
+    """
+    For POST /api/auth/request-access/
+    Creates user with status=pending. No token returned.
+    """
+    name = serializers.CharField(max_length=300)
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, validators=[validate_password])
-    first_name = serializers.CharField(max_length=150)
-    last_name = serializers.CharField(max_length=150)
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():

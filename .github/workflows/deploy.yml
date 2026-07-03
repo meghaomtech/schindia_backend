@@ -1,0 +1,293 @@
+name: Deploy Shichida Backend to AWS
+
+on:
+  push:
+    branches:
+      - main       # → production
+      - develop    # → dev
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: dev
+        type: choice
+        options: [dev, production]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: shichida-backend
+
+jobs:
+  # ── Resolve which environment to deploy to ───────────────────────────
+  resolve-env:
+    name: Resolve environment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set.outputs.environment }}
+      ecs_cluster:    ${{ steps.set.outputs.ecs_cluster }}
+      ecs_service:    ${{ steps.set.outputs.ecs_service }}
+      django_env:     ${{ steps.set.outputs.django_env }}
+      image_tag_suffix: ${{ steps.set.outputs.image_tag_suffix }}
+    steps:
+      - name: Set environment variables
+        id: set
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ENV="${{ github.event.inputs.environment }}"
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            ENV="production"
+          else
+            ENV="dev"
+          fi
+
+          echo "environment=$ENV"            >> $GITHUB_OUTPUT
+          echo "django_env=$ENV"             >> $GITHUB_OUTPUT
+
+          if [[ "$ENV" == "production" ]]; then
+            echo "ecs_cluster=shichida-cluster-prod"          >> $GITHUB_OUTPUT
+            echo "ecs_service=shichida-backend-service-prod"  >> $GITHUB_OUTPUT
+            echo "image_tag_suffix=prod"                      >> $GITHUB_OUTPUT
+          else
+            echo "ecs_cluster=shichida-cluster-dev"           >> $GITHUB_OUTPUT
+            echo "ecs_service=shichida-backend-service-dev"   >> $GITHUB_OUTPUT
+            echo "image_tag_suffix=dev"                       >> $GITHUB_OUTPUT
+          fi
+
+  # ── Build Docker image (shared across environments) ──────────────────
+  build:
+    name: Build & push image
+    runs-on: ubuntu-latest
+    needs: resolve-env
+    environment: ${{ needs.resolve-env.outputs.environment }}
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push Docker image
+        id: push
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+          TAG_SUFFIX: ${{ needs.resolve-env.outputs.image_tag_suffix }}
+        run: |
+          # Tag with SHA + env suffix so prod and dev images are clearly separated
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG-$TAG_SUFFIX \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest-$TAG_SUFFIX \
+            .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG-$TAG_SUFFIX
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest-$TAG_SUFFIX
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG-$TAG_SUFFIX" >> $GITHUB_OUTPUT
+
+  # ── Deploy to Dev ────────────────────────────────────────────────────
+  deploy-dev:
+    name: Deploy → dev
+    runs-on: ubuntu-latest
+    needs: [resolve-env, build]
+    if: needs.resolve-env.outputs.environment == 'dev'
+    environment:
+      name: dev
+      url: ${{ steps.url.outputs.value }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve AWS account ID
+        id: account
+        run: |
+          echo "id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
+
+      - name: Substitute account ID in task definition
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.account.outputs.id }}
+          ENVIRONMENT: dev
+        run: |
+          # Replace account ID placeholder
+          sed -i "s/\${AWS_ACCOUNT_ID}/$AWS_ACCOUNT_ID/g" .aws/task-definition.json
+          # Replace EFS placeholders with dev-specific values
+          sed -i "s/\${EFS_FILESYSTEM_ID}/${{ secrets.EFS_FILESYSTEM_ID }}/g"   .aws/task-definition.json
+          sed -i "s/\${EFS_ACCESS_POINT_ID}/${{ secrets.EFS_ACCESS_POINT_ID }}/g" .aws/task-definition.json
+          # Patch environment-specific values into the task definition
+          # Set DJANGO_ENV=dev and point DynamoDB tables to dev tables
+          jq '
+            .containerDefinitions[0].environment |= map(
+              if .name == "DJANGO_ENV"              then .value = "dev"
+              elif .name == "DYNAMODB_INVOICES_TABLE" then .value = "ShichidaInvoices-dev"
+              else .
+              end
+            )
+          ' .aws/task-definition.json > /tmp/task-def-dev.json
+          cp /tmp/task-def-dev.json .aws/task-definition.json
+
+      - name: Run dev migrations
+        run: |
+          TASK_ARN=$(aws ecs run-task \
+            --cluster ${{ needs.resolve-env.outputs.ecs_cluster }} \
+            --task-definition shichida-backend \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.SUBNET_IDS }}],securityGroups=[${{ secrets.SECURITY_GROUP_ID }}],assignPublicIp=ENABLED}" \
+            --overrides '{"containerOverrides":[{"name":"shichida-backend","command":["python","manage.py","migrate","--noinput"]}]}' \
+            --region ${{ env.AWS_REGION }} \
+            --query 'tasks[0].taskArn' --output text)
+
+          echo "Migration task: $TASK_ARN"
+          aws ecs wait tasks-stopped \
+            --cluster ${{ needs.resolve-env.outputs.ecs_cluster }} \
+            --tasks "$TASK_ARN" --region ${{ env.AWS_REGION }}
+
+          EXIT_CODE=$(aws ecs describe-tasks \
+            --cluster ${{ needs.resolve-env.outputs.ecs_cluster }} \
+            --tasks "$TASK_ARN" --region ${{ env.AWS_REGION }} \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "::error::Dev migration failed (exit $EXIT_CODE). Aborting."
+            exit 1
+          fi
+
+      - name: Render task definition with dev image
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: .aws/task-definition.json
+          container-name: shichida-backend
+          image: ${{ needs.build.outputs.image }}
+
+      - name: Deploy to dev ECS service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ needs.resolve-env.outputs.ecs_service }}
+          cluster: ${{ needs.resolve-env.outputs.ecs_cluster }}
+          wait-for-service-stability: true
+
+      - name: Get ALB URL
+        id: url
+        run: |
+          URL=$(aws cloudformation describe-stacks \
+            --stack-name shichida-backend-infra-dev \
+            --query "Stacks[0].Outputs[?OutputKey=='ALBUrl'].OutputValue" \
+            --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "N/A")
+          echo "value=$URL" >> $GITHUB_OUTPUT
+
+      - name: Dev deploy summary
+        run: |
+          echo "### ✅ Dev deploy complete" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** ${{ needs.build.outputs.image }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **DynamoDB tables:** ShichidaInvoices-dev (isolated from prod)" >> $GITHUB_STEP_SUMMARY
+          echo "- **SQLite DB:** /data/db.sqlite3 on dev EFS (isolated from prod)" >> $GITHUB_STEP_SUMMARY
+
+  # ── Deploy to Production ─────────────────────────────────────────────
+  deploy-production:
+    name: Deploy → production
+    runs-on: ubuntu-latest
+    needs: [resolve-env, build]
+    if: needs.resolve-env.outputs.environment == 'production'
+    environment:
+      name: production
+      url: ${{ steps.url.outputs.value }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve AWS account ID
+        id: account
+        run: |
+          echo "id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
+
+      - name: Substitute account ID in task definition
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.account.outputs.id }}
+        run: |
+          sed -i "s/\${AWS_ACCOUNT_ID}/$AWS_ACCOUNT_ID/g" .aws/task-definition.json
+          sed -i "s/\${EFS_FILESYSTEM_ID}/${{ secrets.EFS_FILESYSTEM_ID }}/g"   .aws/task-definition.json
+          sed -i "s/\${EFS_ACCESS_POINT_ID}/${{ secrets.EFS_ACCESS_POINT_ID }}/g" .aws/task-definition.json
+
+      - name: Run production migrations
+        run: |
+          TASK_ARN=$(aws ecs run-task \
+            --cluster ${{ needs.resolve-env.outputs.ecs_cluster }} \
+            --task-definition shichida-backend \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.SUBNET_IDS }}],securityGroups=[${{ secrets.SECURITY_GROUP_ID }}],assignPublicIp=ENABLED}" \
+            --overrides '{"containerOverrides":[{"name":"shichida-backend","command":["python","manage.py","migrate","--noinput"]}]}' \
+            --region ${{ env.AWS_REGION }} \
+            --query 'tasks[0].taskArn' --output text)
+
+          echo "Migration task: $TASK_ARN"
+          aws ecs wait tasks-stopped \
+            --cluster ${{ needs.resolve-env.outputs.ecs_cluster }} \
+            --tasks "$TASK_ARN" --region ${{ env.AWS_REGION }}
+
+          EXIT_CODE=$(aws ecs describe-tasks \
+            --cluster ${{ needs.resolve-env.outputs.ecs_cluster }} \
+            --tasks "$TASK_ARN" --region ${{ env.AWS_REGION }} \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "::error::Production migration failed (exit $EXIT_CODE). Aborting."
+            exit 1
+          fi
+
+      - name: Render task definition with production image
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: .aws/task-definition.json
+          container-name: shichida-backend
+          image: ${{ needs.build.outputs.image }}
+
+      - name: Deploy to production ECS service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ needs.resolve-env.outputs.ecs_service }}
+          cluster: ${{ needs.resolve-env.outputs.ecs_cluster }}
+          wait-for-service-stability: true
+
+      - name: Get ALB URL
+        id: url
+        run: |
+          URL=$(aws cloudformation describe-stacks \
+            --stack-name shichida-backend-infra-prod \
+            --query "Stacks[0].Outputs[?OutputKey=='ALBUrl'].OutputValue" \
+            --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "N/A")
+          echo "value=$URL" >> $GITHUB_OUTPUT
+
+      - name: Production deploy summary
+        run: |
+          echo "### ✅ Production deploy complete" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** ${{ needs.build.outputs.image }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **DynamoDB tables:** ShichidaInvoices (production)" >> $GITHUB_STEP_SUMMARY
+          echo "- **SQLite DB:** /data/db.sqlite3 on prod EFS (isolated from dev)" >> $GITHUB_STEP_SUMMARY

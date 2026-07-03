@@ -1,37 +1,42 @@
 version: '3.8'
 
 services:
-  db:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_DB: shichida
-      POSTGRES_USER: shichida_user
-      POSTGRES_PASSWORD: shichida_pass
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
   web:
     build: .
-    command: gunicorn schindia_backend.wsgi:application --bind 0.0.0.0:8000 --reload
+    command: gunicorn schindia_backend.wsgi:application --bind 0.0.0.0:8000 --reload --access-logfile -
     volumes:
       - .:/app
     ports:
       - "8000:8000"
     environment:
+      - DJANGO_ENV=development
       - DJANGO_DEBUG=True
       - DJANGO_SECRET_KEY=dev-secret-key-change-in-production
-      - DB_ENGINE=django.db.backends.postgresql
-      - DB_NAME=shichida
-      - DB_USER=shichida_user
-      - DB_PASSWORD=shichida_pass
-      - DB_HOST=db
-      - DB_PORT=5432
       - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0
       - CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+      - AWS_REGION=ap-south-1
+      # Uncomment to use DynamoDB Local for billing development:
+      # - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+      # - DYNAMODB_REGION=ap-south-1
     depends_on:
-      - db
+      migrate:
+        condition: service_completed_successfully
 
-volumes:
-  postgres_data:
+  migrate:
+    build: .
+    command: python manage.py migrate --noinput
+    volumes:
+      - .:/app
+    environment:
+      - DJANGO_ENV=development
+      - DJANGO_DEBUG=True
+      - DJANGO_SECRET_KEY=dev-secret-key-change-in-production
+
+  # Optional: local DynamoDB emulator for billing development
+  # Start with: docker-compose --profile dynamodb up
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    profiles: [dynamodb]
+    ports:
+      - "8001:8000"
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
