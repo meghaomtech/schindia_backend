@@ -21,6 +21,9 @@ import { CentreTimetableRoute } from '@/features/centres/CentreTimetableRoute';
 import { CentreChildrenRoute } from '@/features/centres/CentreChildrenRoute';
 import { CentreRolesRoute } from '@/features/centres/CentreRolesRoute';
 import { InfoPage } from '@/features/info/InfoPage';
+import { InvoiceGeneratorPage } from '@/features/invoice-generator/InvoiceGeneratorPage';
+import { InvoiceHistoryPage } from '@/features/invoice-generator/InvoiceHistoryPage';
+import { PaymentsPage } from '@/features/invoice-generator/PaymentsPage';
 import {
   AccessRequestsIcon,
   CentresIcon,
@@ -30,6 +33,7 @@ import {
   RolesIcon,
   SessionsIcon,
   TimetableIcon,
+  ReceiptIcon,
 } from '@/components/ui/icons';
 import type { ComponentType, SVGProps } from 'react';
 
