@@ -75,8 +75,6 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 @permission_classes([IsAuthenticated, IsApprovedUser])
 def invoice_summary(request):
     """Return invoice counts and totals grouped by status."""
-    from .models import InvoiceItem
-
     total_invoices = Invoice.objects.count()
     status_counts = Invoice.objects.values('status').annotate(count=Count('id'))
 
@@ -84,9 +82,9 @@ def invoice_summary(request):
     status_totals = {}
     for entry in status_counts:
         s = entry['status']
-        total = InvoiceItem.objects.filter(
-            invoice__status=s
-        ).aggregate(total=Sum('amount'))['total'] or 0
+        total = Invoice.objects.filter(
+            status=s
+        ).aggregate(total=Sum('total_amount'))['total'] or 0
         status_totals[s] = {
             'count': entry['count'],
             'total_amount': float(total),

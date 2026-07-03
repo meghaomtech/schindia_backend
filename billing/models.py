@@ -61,7 +61,7 @@ class Invoice(models.Model):
         )['total'] or Decimal('0')
 
         subtotal = self.registration_fee + self.session_fee_amount + extras_total - deductions_total
-        self.gst_amount = (subtotal * self.gst_percent / Decimal('100')).quantize(Decimal('1'))
+        self.gst_amount = (subtotal * self.gst_percent / Decimal('100')).quantize(Decimal('0.01'))
         self.total_amount = subtotal + self.gst_amount + self.debit_brought_forward
         return self.total_amount
 

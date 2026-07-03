@@ -33,12 +33,12 @@ def get_tokens_for_user(user):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
+@permission_classes([IsRootUser])
 def register(request):
     """
-    Register a new user (auto-approved).
+    Invite a new admin user (root only).
     Creates user with role=admin, status=approved.
-    Returns JWT tokens + user immediately.
+    Returns the created user — no JWT issued (user must log in themselves).
     """
     serializer = RegisterSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
@@ -59,7 +59,7 @@ def register(request):
         status='approved',
     )
 
-    return Response(get_tokens_for_user(user), status=status.HTTP_201_CREATED)
+    return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])

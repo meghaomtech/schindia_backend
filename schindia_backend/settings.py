@@ -252,7 +252,16 @@ if IS_AWS:
 
 if IS_PRODUCTION:
     DEBUG = False
+    AWS_STORAGE_BUCKET_NAME  = os.environ.get('AWS_S3_BUCKET', 'shichida-uploads-production')
+    AWS_S3_CUSTOM_DOMAIN     = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
+    STATIC_URL               = f'https://{AWS_S3_CUSTOM_DOMAIN}/static/'
+    DYNAMODB_INVOICES_TABLE  = os.environ.get('DYNAMODB_INVOICES_TABLE',  'ShichidaInvoices-production')
+    DYNAMODB_CENTERS_TABLE   = os.environ.get('DYNAMODB_CENTERS_TABLE',   'ShichidaCenters-production')
+    DYNAMODB_CHILDREN_TABLE  = os.environ.get('DYNAMODB_CHILDREN_TABLE',  'ShichidaChildren-production')
+    DYNAMODB_USERS_TABLE     = os.environ.get('DYNAMODB_USERS_TABLE',     'ShichidaUsers-production')
+    DYNAMODB_ROLES_TABLE     = os.environ.get('DYNAMODB_ROLES_TABLE',     'ShichidaRoles-production')
     SECURE_SSL_REDIRECT            = True
+    SECURE_REDIRECT_EXEMPT          = [r'^api/auth/login/']
     SECURE_HSTS_SECONDS            = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD            = True

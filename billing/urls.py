@@ -7,9 +7,9 @@ router.register(r'invoices', views.InvoiceViewSet, basename='invoice')
 router.register(r'purchases', views.PurchaseViewSet, basename='purchase')
 
 urlpatterns = [
-    path('', include(router.urls)),
-    # Invoice summary/dashboard
+    # Must be before router.urls so 'summary' isn't matched as a pk
     path('invoices/summary/', views.invoice_summary, name='invoice-summary'),
+    path('', include(router.urls)),
     # Nested under child
     path(
         'children/<uuid:child_pk>/invoices/',

@@ -24,7 +24,7 @@ RUN python manage.py collectstatic --noinput 2>/dev/null || true
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:8000/api/auth/me/ || exit 0
+  CMD curl -f http://localhost:8000/api/auth/login/ || exit 1
 
 EXPOSE 8000
 

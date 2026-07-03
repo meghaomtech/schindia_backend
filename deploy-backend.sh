@@ -44,10 +44,21 @@ if [ "$MODE" = "aws" ]; then
         --services shichida-backend-service \
         --region "$REGION"
 
+    ALB_DNS=$(aws elbv2 describe-load-balancers \
+        --region "$REGION" \
+        --query "LoadBalancers[?contains(LoadBalancerName,'shichida')].DNSName" \
+        --output text 2>/dev/null || echo "")
+
     echo ""
     echo "✅ AWS deployment complete!"
     echo "   SQLite DB lives at /data/db.sqlite3 on EFS (persistent across deployments)"
     echo "   DynamoDB billing tables are always available via boto3"
+    if [ -n "$ALB_DNS" ]; then
+        echo ""
+        echo "API Base URLs:"
+        echo "  Auth:     https://$ALB_DNS/api/auth/"
+        echo "  API:      https://$ALB_DNS/api/v1/"
+    fi
 else
     echo ""
     echo "[1/4] Installing dependencies..."
@@ -70,7 +81,5 @@ else
     echo "  Auth:     http://localhost:8000/api/auth/"
     echo "  API:      http://localhost:8000/api/v1/"
     echo ""
-    echo "Root admin login:"
-    echo "  Email:    admin@shichida.in"
-    echo "  Password: Admin@123456"
+    echo "Root admin login: use credentials from your .env or password manager"
 fi
