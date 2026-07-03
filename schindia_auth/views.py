@@ -8,10 +8,12 @@ from django.contrib.auth import get_user_model
 from .serializers import (
     RegisterSerializer,
     RequestAccessSerializer,
+    RequestRootAccessSerializer,
     LoginSerializer,
     UserSerializer,
     AccessRequestSerializer,
 )
+from .models import RootAccessRequest
 from .permissions import IsRootUser
 
 User = get_user_model()
@@ -30,6 +32,29 @@ def get_tokens_for_user(user):
             'role': user.role,
         }
     }
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def request_root_access(request):
+    """
+    Request root access from frontend.
+    Stores the request in RootAccessRequest — visible in Django admin.
+    Admin can approve (creates root user) or reject from there.
+    """
+    serializer = RequestRootAccessSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    RootAccessRequest.objects.create(
+        name=serializer.validated_data['name'],
+        email=serializer.validated_data['email'],
+        password=serializer.validated_data['password'],
+    )
+
+    return Response(
+        {'detail': 'Root access request submitted. Awaiting admin approval.'},
+        status=status.HTTP_201_CREATED
+    )
 
 
 @api_view(['POST'])

@@ -1,6 +1,37 @@
 import uuid
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.contrib.auth.hashers import make_password
+
+
+class RootAccessRequest(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=300)
+    email = models.EmailField(unique=True)
+    password = models.CharField(max_length=128)  # hashed
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    requested_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-requested_at']
+        verbose_name = 'Root Access Request'
+        verbose_name_plural = 'Root Access Requests'
+
+    def __str__(self):
+        return f"{self.name} ({self.email}) - {self.status}"
+
+    def save(self, *args, **kwargs):
+        # Hash password only if it's not already hashed
+        if self.password and not self.password.startswith('pbkdf2_'):
+            self.password = make_password(self.password)
+        super().save(*args, **kwargs)
 
 
 class User(AbstractUser):
