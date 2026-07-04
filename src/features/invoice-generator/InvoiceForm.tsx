@@ -7,7 +7,7 @@ import type {
   ExtraLineItem,
   SavedCenter,
 } from './invoiceGeneratorTypes';
-import { saveCenterToCloud, listCentersFromCloud, deleteCenterFromCloud, isApiConfigured } from '@/lib/invoiceApi';
+import { saveCenterToCloud, listCentersFromCloud, isApiConfigured } from '@/lib/invoiceApi';
 
 const CENTERS_KEY = 'shichida_saved_centers_v2';
 const INV_COUNTER_KEY = 'shichida_inv_counter_v2';
@@ -146,13 +146,13 @@ export function InvoiceForm({
     });
   }
 
-  function deleteCenter(id: string) {
-    const target = savedCenters.find((c) => c.id === id);
-    const updated = savedCenters.filter((c) => c.id !== id);
-    persistCentersLocal(updated);
-    setSavedCenters(updated);
-    if (target) deleteCenterFromCloud(target.centerCode).catch(() => {});
-  }
+  // function deleteCenter(id: string) {
+  //   const target = savedCenters.find((c) => c.id === id);
+  //   const updated = savedCenters.filter((c) => c.id !== id);
+  //   persistCentersLocal(updated);
+  //   setSavedCenters(updated);
+  //   if (target) deleteCenterFromCloud(target.centerCode).catch(() => {});
+  // }
 
   function updateExtra(id: string, patch: Partial<ExtraLineItem>) {
     set('extraItems', data.extraItems.map((e) => (e.id === id ? { ...e, ...patch } : e)));

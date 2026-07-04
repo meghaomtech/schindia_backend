@@ -23,10 +23,7 @@ import { InvoiceGeneratorPage } from '@/features/invoice-generator/InvoiceGenera
 import { InvoiceHistoryPage } from '@/features/invoice-generator/InvoiceHistoryPage';
 import { PaymentsPage } from '@/features/invoice-generator/PaymentsPage';
 import {
-  AccessRequestsIcon,
-  CentresIcon,
   ChildrenIcon,
-  InfoIcon,
   LogoutIcon,
   RolesIcon,
   SessionsIcon,
@@ -37,19 +34,21 @@ import type { ComponentType, SVGProps } from 'react';
 
 type IconType = ComponentType<SVGProps<SVGSVGElement>>;
 
-const CENTRE_SUBNAV: { to: (id: string) => string; label: string; Icon: IconType }[] = [
+const _CENTRE_SUBNAV: { to: (id: string) => string; label: string; Icon: IconType }[] = [
   { to: (id) => `/admin/centres/${id}/sessions`, label: 'Sessions', Icon: SessionsIcon },
   { to: (id) => `/admin/centres/${id}/timetable`, label: 'Timetable', Icon: TimetableIcon },
   { to: (id) => `/admin/centres/${id}/children`, label: 'Children', Icon: ChildrenIcon },
   { to: (id) => `/admin/centres/${id}/roles`, label: 'Roles', Icon: RolesIcon },
 ];
+void _CENTRE_SUBNAV;
 
 function Sidebar() {
   const centreMatch = useMatch('/admin/centres/:centreId/*');
   const openCentreId = centreMatch?.params.centreId ?? null;
   const { centres } = useStore();
   const { isRoot, user, logout } = useAuth();
-  const openCentre = centres.find((c) => c.id === openCentreId) ?? null;
+  const _openCentre = centres.find((c) => c.id === openCentreId) ?? null;
+  void _openCentre;
 
   return (
     <aside className="w-56 shrink-0 border-r border-border bg-bg-elev p-4 flex flex-col">
