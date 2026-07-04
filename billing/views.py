@@ -37,6 +37,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             return InvoiceCreateSerializer
         return InvoiceListSerializer
 
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
     @action(detail=True, methods=['post'])
     def send(self, request, pk=None):
         """Mark an invoice as sent and record the timestamp."""

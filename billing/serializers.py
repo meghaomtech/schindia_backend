@@ -39,7 +39,7 @@ class InvoiceListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Invoice
         fields = [
-            'id', 'number', 'child', 'invoice_date', 'due_date',
+            'id', 'number', 'child', 'user', 'invoice_date', 'due_date',
             'payment_term', 'tax_rate', 'status', 'sent_at',
             'student_name', 'parent_name', 'center_code',
             'registration_fee', 'session_fee_amount',
@@ -58,14 +58,14 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Invoice
         fields = [
-            'id', 'number', 'child', 'invoice_date', 'due_date',
+            'id', 'number', 'child', 'user', 'invoice_date', 'due_date',
             'payment_term', 'tax_rate', 'status', 'sent_at',
             'student_name', 'parent_name', 'center_code',
             'registration_fee', 'session_fee_amount',
             'gst_percent', 'debit_brought_forward',
             'items', 'extra_items', 'deductions', 'sent_to',
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'user']
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])

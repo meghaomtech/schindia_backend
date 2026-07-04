@@ -1,5 +1,6 @@
 import uuid
 from decimal import Decimal
+from django.conf import settings
 from django.db import models
 from children.models import Child
 
@@ -23,6 +24,10 @@ class Invoice(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     number = models.CharField(max_length=50, unique=True)
     child = models.ForeignKey(Child, on_delete=models.CASCADE, related_name='invoices')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='invoices'
+    )
     invoice_date = models.DateField()
     due_date = models.DateField()
     payment_term = models.CharField(max_length=20, choices=TERM_CHOICES)
