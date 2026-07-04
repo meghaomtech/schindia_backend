@@ -229,7 +229,24 @@ def login_view(request):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        return Response(get_tokens_for_user_data(user))
+        # Ensure user exists in SQLite for JWT token validation
+        django_user, created = User.objects.get_or_create(
+            email=email,
+            defaults={
+                'username': email,
+                'first_name': user.get('first_name', ''),
+                'last_name': user.get('last_name', ''),
+                'role': user.get('role', 'admin'),
+                'status': 'approved',
+            }
+        )
+        if not created:
+            # Update fields in case they changed
+            django_user.role = user.get('role', django_user.role)
+            django_user.status = 'approved'
+            django_user.save(update_fields=['role', 'status'])
+
+        return Response(get_tokens_for_user_data(django_user))
     else:
         try:
             user = User.objects.get(email=email)
