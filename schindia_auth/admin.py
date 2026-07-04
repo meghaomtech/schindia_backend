@@ -34,6 +34,26 @@ class RootAccessRequestAdmin(admin.ModelAdmin):
     def has_add_permission(self, request):
         return False
 
+    def save_model(self, request, obj, form, change):
+        """When status is changed to 'approved' via the edit form, create the User."""
+        if change and obj.status == 'approved':
+            # Check if user already exists
+            if not User.objects.filter(email=obj.email).exists():
+                parts = obj.name.strip().split(' ', 1)
+                user = User(
+                    username=obj.email,
+                    email=obj.email,
+                    first_name=parts[0],
+                    last_name=parts[1] if len(parts) > 1 else '',
+                    role='root',
+                    status='approved',
+                    is_staff=True,
+                )
+                user.password = obj.password  # already hashed
+                user.save()
+            obj.reviewed_at = timezone.now()
+        super().save_model(request, obj, form, change)
+
     @admin.action(description='Approve selected root access requests')
     def approve_requests(self, request, queryset):
         approved = 0

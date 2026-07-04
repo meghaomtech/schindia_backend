@@ -83,30 +83,15 @@ TEMPLATES = [
 WSGI_APPLICATION = 'schindia_backend.wsgi.application'
 
 # =============================================================================
-# DATABASE - Local (SQLite) vs Production (AWS RDS PostgreSQL)
+# DATABASE - SQLite always (DynamoDB handles production data via service layer)
 # =============================================================================
 
-if DJANGO_ENV == 'production':
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': config('PROD_DB_NAME', default='shichida'),
-            'USER': config('PROD_DB_USER', default='shichida_admin'),
-            'PASSWORD': config('PROD_DB_PASSWORD', default=''),
-            'HOST': config('PROD_DB_HOST', default=''),
-            'PORT': config('PROD_DB_PORT', default='5432'),
-            'OPTIONS': {
-                'sslmode': 'require',
-            },
-        }
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
     }
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-        }
-    }
+}
 
 # =============================================================================
 # CUSTOM USER MODEL
@@ -262,14 +247,16 @@ if DJANGO_ENV == 'production':
     DYNAMODB_USERS_TABLE = os.environ.get('DYNAMODB_USERS_TABLE', 'ShichidaUsers-production')
     DYNAMODB_ROLES_TABLE = os.environ.get('DYNAMODB_ROLES_TABLE', 'ShichidaRoles-production')
 
-    SECURE_SSL_REDIRECT = True
-    SECURE_REDIRECT_EXEMPT = [r'^api/auth/login/']
-    SECURE_HSTS_SECONDS = 31536000
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = True
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    # SSL settings - only enable when HTTPS is configured (set ENABLE_SSL=True in .env)
+    if config('ENABLE_SSL', default='False', cast=bool):
+        SECURE_SSL_REDIRECT = True
+        SECURE_REDIRECT_EXEMPT = [r'^api/auth/login/']
+        SECURE_HSTS_SECONDS = 31536000
+        SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+        SECURE_HSTS_PRELOAD = True
+        SESSION_COOKIE_SECURE = True
+        CSRF_COOKIE_SECURE = True
+        SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # =============================================================================
 # LOGGING
