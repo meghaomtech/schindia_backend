@@ -10,7 +10,6 @@ import { AuthProvider, useAuth } from '@/features/auth/AuthContext';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { SignupPage } from '@/features/auth/SignupPage';
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute';
-import { AccessRequestsPage } from '@/features/auth/AccessRequestsPage';
 import { LandingPage } from '@/features/landing/LandingPage';
 import { CentresPage } from '@/features/centres/CentresPage';
 import { CentreLayout } from '@/features/centres/CentreLayout';
@@ -159,7 +158,6 @@ function AdminLayout() {
           <Route path="invoices" element={<Navigate to="/admin/invoices/generate" replace />} />
           <Route path="payments" element={<PaymentsPage />} />
           <Route path="info" element={<InfoPage />} />
-          <Route path="access-requests" element={<AccessRequestsPage />} />
           <Route path="*" element={<Navigate to="/admin/centres" replace />} />
         </Routes>
       </main>
