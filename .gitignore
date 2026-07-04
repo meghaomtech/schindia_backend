@@ -37,6 +37,9 @@ Thumbs.db
 # Docker
 postgres_data/
 
+# Deployment config (local only)
+nginx.conf
+
 # AWS
 .aws/credentials
 *.zip
