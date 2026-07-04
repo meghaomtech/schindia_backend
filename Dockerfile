@@ -9,7 +9,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -22,10 +21,7 @@ COPY . .
 # Collect static files
 RUN python manage.py collectstatic --noinput 2>/dev/null || true
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:8000/api/auth/login/ || exit 1
-
+# Run migrations on startup and start server
 EXPOSE 8000
 
-CMD ["gunicorn", "schindia_backend.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120", "--access-logfile", "-"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && gunicorn schindia_backend.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120"]
