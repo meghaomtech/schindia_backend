@@ -9,7 +9,6 @@ import { StoreProvider, useStore } from '@/store/store';
 import { AuthProvider, useAuth } from '@/features/auth/AuthContext';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { SignupPage } from '@/features/auth/SignupPage';
-import { RegisterPage } from '@/features/auth/RegisterPage';
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute';
 import { AccessRequestsPage } from '@/features/auth/AccessRequestsPage';
 import { LandingPage } from '@/features/landing/LandingPage';
@@ -143,7 +142,7 @@ function Sidebar() {
           </div>
         </div>
         <button
-          onClick={logout}
+          onClick={() => logout()}
           className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm text-text-muted hover:bg-beige hover:text-text w-full transition-colors"
         >
           <LogoutIcon className="shrink-0" width={16} height={16} />
@@ -192,7 +191,6 @@ export default function App() {
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
           <Route path="/request-access" element={<SignupPage />} />
           <Route path="/signup" element={<Navigate to="/request-access" replace />} />
           <Route path="/admin/*" element={
