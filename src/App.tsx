@@ -109,23 +109,6 @@ function Sidebar() {
           <span>Payments</span>
         </NavLink>
 
-        {/* Root-only: Access Requests */}
-        {isRoot && (
-          <NavLink
-            to="/admin/access-requests"
-            className={({ isActive }) =>
-              [
-                'flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium',
-                isActive
-                  ? 'bg-olive/10 text-olive'
-                  : 'text-text-muted hover:bg-beige hover:text-text',
-              ].join(' ')
-            }
-          >
-            <AccessRequestsIcon className="shrink-0" />
-            <span>Access Requests</span>
-          </NavLink>
-        )}
       </nav>
 
       {/* User info & logout */}
