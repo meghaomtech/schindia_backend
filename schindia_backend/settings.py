@@ -114,6 +114,15 @@ else:
 
 AUTH_USER_MODEL = 'schindia_auth.User'
 
+# Password hashing — prefer argon2 as per security requirements
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+    'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',
+    'django.contrib.auth.hashers.ScryptPasswordHasher',
+]
+
 # =============================================================================
 # PASSWORD VALIDATION
 # =============================================================================
@@ -154,7 +163,7 @@ AWS_S3_REGION_NAME = AWS_REGION
 
 # S3 Storage (for file uploads - production only)
 if DJANGO_ENV == 'production' and AWS_ACCESS_KEY_ID:
-    AWS_STORAGE_BUCKET_NAME = config('AWS_STORAGE_BUCKET_NAME', default='shichida-uploads')
+    AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_S3_BUCKET', 'shichida-uploads-production')
     AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
     AWS_S3_OBJECT_PARAMETERS = {
         'CacheControl': 'max-age=86400',
@@ -162,12 +171,19 @@ if DJANGO_ENV == 'production' and AWS_ACCESS_KEY_ID:
     AWS_DEFAULT_ACL = None
     AWS_S3_FILE_OVERWRITE = False
 
-    # Use S3 for media files in production
+    # Use S3 for media/static files in production
     DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
     MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/media/'
+    STATIC_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/static/'
 
-    # Static files can also go to S3 (optional - whitenoise handles it otherwise)
-    # STATICFILES_STORAGE = 'storages.backends.s3boto3.S3StaticStorage'
+    # DynamoDB table names
+    DYNAMODB_INVOICES_TABLE = os.environ.get('DYNAMODB_INVOICES_TABLE', 'ShichidaInvoices-production')
+    DYNAMODB_CENTRES_TABLE = os.environ.get('DYNAMODB_CENTRES_TABLE', 'ShichidaCentres-production')
+    DYNAMODB_CHILDREN_TABLE = os.environ.get('DYNAMODB_CHILDREN_TABLE', 'ShichidaChildren-production')
+    DYNAMODB_SESSIONS_TABLE = os.environ.get('DYNAMODB_SESSIONS_TABLE', 'ShichidaSessions-production')
+    DYNAMODB_SLOTS_TABLE = os.environ.get('DYNAMODB_SLOTS_TABLE', 'ShichidaSlots-production')
+    DYNAMODB_CONTACTS_TABLE = os.environ.get('DYNAMODB_CONTACTS_TABLE', 'ShichidaContacts-production')
+    DYNAMODB_PURCHASES_TABLE = os.environ.get('DYNAMODB_PURCHASES_TABLE', 'ShichidaPurchases-production')
 
 # =============================================================================
 # EMAIL CONFIGURATION (AWS SES for production)
@@ -178,8 +194,10 @@ if DJANGO_ENV == 'production' and AWS_ACCESS_KEY_ID:
     EMAIL_HOST = f'email-smtp.{AWS_REGION}.amazonaws.com'
     EMAIL_PORT = 587
     EMAIL_USE_TLS = True
-    EMAIL_HOST_USER = AWS_ACCESS_KEY_ID
-    EMAIL_HOST_PASSWORD = AWS_SECRET_ACCESS_KEY
+    # SES SMTP credentials are NOT IAM access keys — generate them separately
+    # via AWS Console → SES → SMTP Settings → Create SMTP credentials
+    EMAIL_HOST_USER = config('SES_SMTP_USER', default='')
+    EMAIL_HOST_PASSWORD = config('SES_SMTP_PASSWORD', default='')
     DEFAULT_FROM_EMAIL = config('AWS_SES_SENDER', default='noreply@shichida.in')
 else:
     # Local: print emails to console
@@ -240,7 +258,12 @@ CORS_ALLOW_CREDENTIALS = True
 # =============================================================================
 
 if DJANGO_ENV == 'production':
+    # DynamoDB table names for production
+    DYNAMODB_USERS_TABLE = os.environ.get('DYNAMODB_USERS_TABLE', 'ShichidaUsers-production')
+    DYNAMODB_ROLES_TABLE = os.environ.get('DYNAMODB_ROLES_TABLE', 'ShichidaRoles-production')
+
     SECURE_SSL_REDIRECT = True
+    SECURE_REDIRECT_EXEMPT = [r'^api/auth/login/']
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
@@ -267,8 +290,20 @@ LOGGING = {
             'formatter': 'verbose',
         },
     },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'DEBUG' if DEBUG else 'WARNING',
+            'propagate': False,
+        },
+    },
     'root': {
         'handlers': ['console'],
-        'level': 'INFO',
+        'level': 'DEBUG' if DEBUG else 'INFO',
     },
 }

@@ -65,7 +65,7 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
             'gst_percent', 'debit_brought_forward',
             'items', 'extra_items', 'deductions', 'sent_to',
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'user']
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
