@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
+import { PasswordInput } from '@/components/ui/PasswordInput';
 import { useAuth } from './AuthContext';
 import { AuthLayout } from './AuthLayout';
 import { validateSignup } from './validateAuth';
@@ -105,10 +106,6 @@ export function SignupPage() {
           <Link to="/login" className="text-olive font-medium hover:underline">
             Log in
           </Link>
-          {' · '}
-          <Link to="/register" className="text-olive font-medium hover:underline">
-            Register
-          </Link>
         </span>
       }
     >
@@ -171,10 +168,9 @@ export function SignupPage() {
           </Field>
 
           <Field label="Password" error={getError('password')} required>
-            <Input
+            <PasswordInput
               ref={passwordRef}
               id="password"
-              type="password"
               value={password}
               onChange={(e) => {
                 setPassword(e.target.value);
@@ -191,10 +187,9 @@ export function SignupPage() {
           </Field>
 
           <Field label="Confirm Password" error={getError('confirmPassword')} required>
-            <Input
+            <PasswordInput
               ref={confirmRef}
               id="confirmPassword"
-              type="password"
               value={confirmPassword}
               onChange={(e) => {
                 setConfirmPassword(e.target.value);

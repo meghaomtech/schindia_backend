@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
+import { PasswordInput } from '@/components/ui/PasswordInput';
 import { useAuth } from './AuthContext';
 import { AuthLayout } from './AuthLayout';
 import { validateLogin } from './validateAuth';
@@ -68,11 +69,7 @@ export function LoginPage() {
       title="Sign in to your account"
       footer={
         <span>
-          Don't have an account?{' '}
-          <Link to="/register" className="text-olive font-medium hover:underline">
-            Register
-          </Link>
-          {' · '}
+          Don't have access?{' '}
           <Link to="/request-access" className="text-olive font-medium hover:underline">
             Request access
           </Link>
@@ -111,10 +108,9 @@ export function LoginPage() {
           </Field>
 
           <Field label="Password" error={getError('password')} required>
-            <Input
+            <PasswordInput
               ref={passwordRef}
               id="password"
-              type="password"
               value={password}
               onChange={(e) => {
                 setPassword(e.target.value);

@@ -1,6 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { uid } from '@/lib/ids';
 
 export type UserRole = 'root' | 'admin';
 export type ApprovalStatus = 'approved' | 'pending' | 'rejected';
@@ -10,12 +9,6 @@ export interface AuthUser {
   name: string;
   email: string;
   role: UserRole;
-}
-
-interface StoredUser extends AuthUser {
-  passwordHash: string;
-  status: ApprovalStatus;
-  requestedAt: string;
 }
 
 export interface AccessRequest {
@@ -31,41 +24,42 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   isRoot: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (name: string, email: string, password: string) => Promise<void>;
   requestAccess: (name: string, email: string, password: string) => Promise<{ status: 'pending' }>;
-  logout: () => void;
-  getAccessRequests: () => AccessRequest[];
-  approveRequest: (userId: string) => void;
-  rejectRequest: (userId: string) => void;
+  logout: () => Promise<void>;
+  getAccessRequests: () => Promise<AccessRequest[]>;
+  approveRequest: (userId: string) => Promise<void>;
+  rejectRequest: (userId: string) => Promise<void>;
 }
 
 const AUTH_USER_KEY = 'shichida_auth_user';
-const AUTH_USERS_KEY = 'shichida_auth_users';
+const AUTH_TOKENS_KEY = 'shichida_auth_tokens';
 
-// WARNING: Java-style hashCode — not one-way and has massive collision risk.
-// This is only acceptable for localStorage-only demo purposes.
-// Passwords stored this way are plaintext-equivalent (visible via DevTools).
-// If this ever moves to a real backend, replace with bcrypt or argon2 server-side.
-function simpleHash(str: string): string {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash + char) | 0;
+const BASE_URL = import.meta.env.VITE_INVOICES_API_URL ?? 'http://127.0.0.1:8000';
+
+async function apiFetch(path: string, options: RequestInit = {}) {
+  const tokens = getStoredTokens();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string>),
+  };
+  if (tokens?.access) {
+    headers['Authorization'] = `Bearer ${tokens.access}`;
   }
-  return hash.toString(36);
+  const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail ?? 'Something went wrong. Please try again.');
+  }
+  return res.json();
 }
 
-function getStoredUsers(): StoredUser[] {
+function getStoredTokens(): { access: string; refresh: string } | null {
   try {
-    const raw = localStorage.getItem(AUTH_USERS_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const raw = localStorage.getItem(AUTH_TOKENS_KEY);
+    return raw ? JSON.parse(raw) : null;
   } catch {
-    return [];
+    return null;
   }
-}
-
-function saveStoredUsers(users: StoredUser[]) {
-  localStorage.setItem(AUTH_USERS_KEY, JSON.stringify(users));
 }
 
 function getPersistedUser(): AuthUser | null {
@@ -83,119 +77,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => getPersistedUser());
 
   const login = useCallback(async (email: string, password: string) => {
-    // Simulate network delay
-    await new Promise((r) => setTimeout(r, 500));
+    const data = await apiFetch('/api/auth/login/', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
 
-    const users = getStoredUsers();
-    const found = users.find(
-      (u) => u.email.toLowerCase() === email.toLowerCase() && u.passwordHash === simpleHash(password)
-    );
-
-    if (!found) {
-      throw new Error('Invalid email or password');
-    }
-
-    if (found.status === 'pending') {
-      throw new Error('Your access request is pending approval from the root admin.');
-    }
-
-    if (found.status === 'rejected') {
-      throw new Error('Your access request has been rejected. Please contact the administrator.');
-    }
-
-    const authUser: AuthUser = { id: found.id, name: found.name, email: found.email, role: found.role };
-    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(authUser));
-    setUser(authUser);
-  }, []);
-
-  const register = useCallback(async (name: string, email: string, password: string): Promise<void> => {
-    // Simulate network delay
-    await new Promise((r) => setTimeout(r, 500));
-
-    const users = getStoredUsers();
-    const exists = users.some((u) => u.email.toLowerCase() === email.toLowerCase());
-
-    if (exists) {
-      throw new Error('An account with this email already exists');
-    }
-
-    const newUser: StoredUser = {
-      id: uid('usr'),
-      name,
-      email,
-      passwordHash: simpleHash(password),
-      role: 'admin',
-      status: 'approved',
-      requestedAt: new Date().toISOString(),
+    const authUser: AuthUser = {
+      id: data.user.id,
+      name: data.user.name,
+      email: data.user.email,
+      role: data.user.role,
     };
 
-    saveStoredUsers([...users, newUser]);
-
-    // Auto-login after registration
-    const authUser: AuthUser = { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role };
+    localStorage.setItem(AUTH_TOKENS_KEY, JSON.stringify({ access: data.access, refresh: data.refresh }));
     localStorage.setItem(AUTH_USER_KEY, JSON.stringify(authUser));
     setUser(authUser);
   }, []);
 
   const requestAccess = useCallback(async (name: string, email: string, password: string): Promise<{ status: 'pending' }> => {
-    // Simulate network delay
-    await new Promise((r) => setTimeout(r, 500));
-
-    const users = getStoredUsers();
-    const exists = users.some((u) => u.email.toLowerCase() === email.toLowerCase());
-
-    if (exists) {
-      throw new Error('An account with this email already exists');
-    }
-
-    const newUser: StoredUser = {
-      id: uid('usr'),
-      name,
-      email,
-      passwordHash: simpleHash(password),
-      role: 'admin',
-      status: 'pending',
-      requestedAt: new Date().toISOString(),
-    };
-
-    saveStoredUsers([...users, newUser]);
-
-    // Don't auto-login — user must wait for root approval
+    await apiFetch('/api/auth/request-root-access/', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, password }),
+    });
     return { status: 'pending' };
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    const tokens = getStoredTokens();
+    if (tokens?.refresh) {
+      await apiFetch('/api/auth/logout/', {
+        method: 'POST',
+        body: JSON.stringify({ refresh: tokens.refresh }),
+      }).catch(() => {});
+    }
     localStorage.removeItem(AUTH_USER_KEY);
+    localStorage.removeItem(AUTH_TOKENS_KEY);
     setUser(null);
   }, []);
 
-  const getAccessRequests = useCallback((): AccessRequest[] => {
-    const users = getStoredUsers();
-    return users
-      .filter((u) => u.role !== 'root')
-      .map((u) => ({
-        id: u.id,
-        name: u.name,
-        email: u.email,
-        status: u.status,
-        requestedAt: u.requestedAt,
-      }));
+  const getAccessRequests = useCallback(async (): Promise<AccessRequest[]> => {
+    const data = await apiFetch('/api/auth/access-requests/');
+    return data.map((r: { id: string; name: string; email: string; status: ApprovalStatus; requested_at: string }) => ({
+      id: r.id,
+      name: r.name,
+      email: r.email,
+      status: r.status,
+      requestedAt: r.requested_at,
+    }));
   }, []);
 
-  const approveRequest = useCallback((userId: string) => {
-    const users = getStoredUsers();
-    const updated = users.map((u) =>
-      u.id === userId ? { ...u, status: 'approved' as ApprovalStatus } : u
-    );
-    saveStoredUsers(updated);
+  const approveRequest = useCallback(async (userId: string) => {
+    await apiFetch(`/api/auth/access-requests/${userId}/approve/`, { method: 'PATCH' });
   }, []);
 
-  const rejectRequest = useCallback((userId: string) => {
-    const users = getStoredUsers();
-    const updated = users.map((u) =>
-      u.id === userId ? { ...u, status: 'rejected' as ApprovalStatus } : u
-    );
-    saveStoredUsers(updated);
+  const rejectRequest = useCallback(async (userId: string) => {
+    await apiFetch(`/api/auth/access-requests/${userId}/reject/`, { method: 'PATCH' });
   }, []);
 
   const value = useMemo<AuthContextValue>(
@@ -204,14 +140,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: user !== null,
       isRoot: user?.role === 'root',
       login,
-      register,
       requestAccess,
       logout,
       getAccessRequests,
       approveRequest,
       rejectRequest,
     }),
-    [user, login, register, requestAccess, logout, getAccessRequests, approveRequest, rejectRequest]
+    [user, login, requestAccess, logout, getAccessRequests, approveRequest, rejectRequest]
   );
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
