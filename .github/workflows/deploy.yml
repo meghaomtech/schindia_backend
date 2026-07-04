@@ -24,7 +24,7 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          VITE_INVOICES_API_URL: http://${{ secrets.EC2_HOST }}
+          VITE_INVOICES_API_URL: https://d2phsjh35pvdtn.cloudfront.net
 
       - name: Deploy to EC2
         uses: appleboy/scp-action@v0.1.7
