@@ -32,7 +32,7 @@ export function nextInvoiceNum(): string {
 }
 
 function uid(): string {
-  return crypto.randomUUID();
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
 }
 
 export function newExtraItem(): ExtraLineItem {

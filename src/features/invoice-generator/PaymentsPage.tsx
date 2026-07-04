@@ -106,7 +106,7 @@ export function PaymentsPage() {
     } else {
       // Create new payment
       const payment: Payment = {
-        id: crypto.randomUUID(),
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 9),
         invoiceNumber: form.invoiceNumber,
         studentName: form.studentName,
         parentName: form.parentName,
