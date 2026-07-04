@@ -233,7 +233,7 @@ export function InvoiceForm({
         )}
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Center Code" error={errors.centerCode}>
+          <Field label="Center Code" error={errors.centerCode} required>
             <Input
               value={data.centerCode}
               onChange={(e) => set('centerCode', e.target.value.toUpperCase())}
@@ -339,7 +339,7 @@ export function InvoiceForm({
       <section className="card p-5 space-y-4">
         <h2 className="font-semibold">Student Details</h2>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Student Name" error={errors.studentName}>
+          <Field label="Student Name" error={errors.studentName} required>
             <Input
               value={data.studentName}
               onChange={(e) => set('studentName', e.target.value)}
@@ -347,7 +347,7 @@ export function InvoiceForm({
               placeholder="Testing 1"
             />
           </Field>
-          <Field label="Parent / Guardian" error={errors.parentName}>
+          <Field label="Parent / Guardian" error={errors.parentName} required>
             <Input
               value={data.parentName}
               onChange={(e) => set('parentName', e.target.value)}
@@ -384,7 +384,7 @@ export function InvoiceForm({
       <section className="card p-5 space-y-4">
         <h2 className="font-semibold">Invoice Details</h2>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Invoice Number" error={errors.invoiceNumber}>
+          <Field label="Invoice Number" error={errors.invoiceNumber} required>
             <Input
               value={data.invoiceNumber}
               onChange={(e) => set('invoiceNumber', e.target.value)}
@@ -392,7 +392,7 @@ export function InvoiceForm({
               placeholder="e.g. INV-1001"
             />
           </Field>
-          <Field label="Invoice Date" error={errors.invoiceDate}>
+          <Field label="Invoice Date" error={errors.invoiceDate} required>
             <Input
               type="date"
               value={data.invoiceDate}
@@ -400,7 +400,7 @@ export function InvoiceForm({
               invalid={!!errors.invoiceDate}
             />
           </Field>
-          <Field label="Due Date" error={errors.dueDate}>
+          <Field label="Due Date" error={errors.dueDate} required>
             <Input
               type="date"
               value={data.dueDate}
@@ -462,7 +462,7 @@ export function InvoiceForm({
             <p className="text-xs text-danger">{errors.sessionPeriod}</p>
           )}
           <div className="grid grid-cols-3 gap-3">
-            <Field label="Start Date">
+            <Field label="Start Date" required>
               <Input
                 type="date"
                 value={data.sessionFeeStart}
@@ -473,7 +473,7 @@ export function InvoiceForm({
                 invalid={!!errors.sessionPeriod}
               />
             </Field>
-            <Field label="End Date">
+            <Field label="End Date" required>
               <Input
                 type="date"
                 value={data.sessionFeeEnd}
@@ -484,7 +484,7 @@ export function InvoiceForm({
                 invalid={!!errors.sessionPeriod}
               />
             </Field>
-            <Field label="Amount (₹)" error={errors.sessionFeeAmount}>
+            <Field label="Amount (₹)" error={errors.sessionFeeAmount} required>
               <Input
                 type="number"
                 min={0}
