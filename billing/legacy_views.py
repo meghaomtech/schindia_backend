@@ -27,6 +27,14 @@ def centers_view(request):
             return Response({'centers': centres})
         else:
             data = request.data
+            center_code = data.get('centerCode', '')
+            if center_code:
+                all_centres = centres_db.list_centres()
+                existing = next((c for c in all_centres if c.get('centerCode') == center_code), None)
+                if existing:
+                    centres_db.update_centre(existing['id'], data)
+                    updated = centres_db.get_centre(existing['id'])
+                    return Response(updated, status=status.HTTP_200_OK)
             centre = centres_db.create_centre(data)
             return Response(centre, status=status.HTTP_201_CREATED)
     else:
@@ -59,11 +67,18 @@ def invoices_view(request):
     if use_dynamo():
         from dynamo_backend.services import billing_db
 
+        user_id = str(request.user.id)
+        is_root = getattr(request.user, 'role', '') == 'root'
+
         if request.method == 'GET':
-            invoices = billing_db.list_invoices()
+            if is_root:
+                invoices = billing_db.list_invoices()
+            else:
+                invoices = billing_db.list_invoices(user_id=user_id)
             return Response({'invoices': invoices})
         else:
-            data = request.data
+            data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+            data['user_id'] = user_id
             if isinstance(data, dict):
                 invoice = billing_db.create_invoice(data)
                 return Response(invoice, status=status.HTTP_201_CREATED)
@@ -79,7 +94,10 @@ def invoice_detail_view(request, invoice_id):
     if use_dynamo():
         from dynamo_backend.services import billing_db
         invoice = billing_db.get_invoice(invoice_id)
-        if invoice:
-            return Response(invoice)
-        return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if not invoice:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        is_root = getattr(request.user, 'role', '') == 'root'
+        if not is_root and invoice.get('user_id') != str(request.user.id):
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(invoice)
     return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)

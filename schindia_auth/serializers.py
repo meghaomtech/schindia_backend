@@ -29,8 +29,17 @@ class RegisterSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
 
     def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("A user with this email already exists.")
+        existing = User.objects.filter(email=value).first()
+        if existing:
+            status = getattr(existing, 'status', 'unknown')
+            if status == 'pending':
+                raise serializers.ValidationError("An access request with this email is already pending approval.")
+            elif status == 'approved':
+                raise serializers.ValidationError("An account with this email already exists. Please log in instead.")
+            elif status == 'rejected':
+                raise serializers.ValidationError("A previous request with this email was rejected. Please contact the administrator.")
+            else:
+                raise serializers.ValidationError("A user with this email already exists.")
         return value
 
 
@@ -44,8 +53,17 @@ class RequestAccessSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
 
     def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("A user with this email already exists.")
+        existing = User.objects.filter(email=value).first()
+        if existing:
+            status = getattr(existing, 'status', 'unknown')
+            if status == 'pending':
+                raise serializers.ValidationError("An access request with this email is already pending approval.")
+            elif status == 'approved':
+                raise serializers.ValidationError("An account with this email already exists. Please log in instead.")
+            elif status == 'rejected':
+                raise serializers.ValidationError("A previous request with this email was rejected. Please contact the administrator.")
+            else:
+                raise serializers.ValidationError("A user with this email already exists.")
         return value
 
 

@@ -67,9 +67,18 @@ def register(request):
 
         existing = auth_db.get_user_by_email(serializer.validated_data['email'])
         if existing:
+            user_status = existing.get('status', 'unknown')
+            if user_status == 'pending':
+                msg = 'An access request with this email is already pending approval.'
+            elif user_status == 'approved':
+                msg = 'An account with this email already exists. Please log in instead.'
+            elif user_status == 'rejected':
+                msg = 'A previous request with this email was rejected. Please contact the administrator.'
+            else:
+                msg = 'A user with this email already exists.'
             return Response(
-                {'email': ['A user with this email already exists.']},
-                status=status.HTTP_400_BAD_REQUEST
+                {'detail': msg},
+                status=status.HTTP_409_CONFLICT
             )
 
         user = auth_db.create_user(
@@ -117,9 +126,18 @@ def request_access(request):
 
         existing = auth_db.get_user_by_email(serializer.validated_data['email'])
         if existing:
+            user_status = existing.get('status', 'unknown')
+            if user_status == 'pending':
+                msg = 'An access request with this email is already pending approval.'
+            elif user_status == 'approved':
+                msg = 'An account with this email already exists. Please log in instead.'
+            elif user_status == 'rejected':
+                msg = 'A previous request with this email was rejected. Please contact the administrator.'
+            else:
+                msg = 'A user with this email already exists.'
             return Response(
-                {'email': ['A user with this email already exists.']},
-                status=status.HTTP_400_BAD_REQUEST
+                {'detail': msg},
+                status=status.HTTP_409_CONFLICT
             )
 
         auth_db.create_user(
@@ -167,9 +185,18 @@ def request_root_access(request):
 
         existing = auth_db.get_user_by_email(serializer.validated_data['email'])
         if existing:
+            user_status = existing.get('status', 'unknown')
+            if user_status == 'pending':
+                msg = 'An access request with this email is already pending approval.'
+            elif user_status == 'approved':
+                msg = 'An account with this email already exists. Please log in instead.'
+            elif user_status == 'rejected':
+                msg = 'A previous request with this email was rejected. Please contact the administrator.'
+            else:
+                msg = 'A user with this email already exists.'
             return Response(
-                {'email': ['A user with this email already exists.']},
-                status=status.HTTP_400_BAD_REQUEST
+                {'detail': msg},
+                status=status.HTTP_409_CONFLICT
             )
 
         auth_db.create_user(
@@ -202,6 +229,8 @@ def request_root_access(request):
 @permission_classes([AllowAny])
 def login_view(request):
     """Login with email/password."""
+    import logging
+    logger = logging.getLogger(__name__)
     serializer = LoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
 
@@ -212,6 +241,8 @@ def login_view(request):
         from dynamo_backend.services import auth_db
 
         user = auth_db.get_user_by_email(email)
+        if user:
+            verify_result = auth_db.verify_password(user, password)
         if not user or not auth_db.verify_password(user, password):
             return Response(
                 {'detail': 'Invalid credentials.'},
