@@ -8,9 +8,7 @@ export function LandingPage() {
       {/* Nav */}
       <header className="px-6 py-5 flex items-center justify-between max-w-6xl mx-auto w-full">
         <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-olive to-olive/80 text-white flex items-center justify-center font-bold text-base shadow-md">
-            S
-          </div>
+          <img src="/Shichida India logo.png" alt="Shichida India" className="h-11 w-auto" />
           <div>
             <div className="text-lg font-bold text-olive tracking-tight">Shichida India</div>
             <div className="text-[10px] text-text-muted uppercase tracking-widest">Early Learning Centres</div>
@@ -69,7 +67,7 @@ export function LandingPage() {
         </div>
       </main>
 
-      {/* Features */}
+      {/* Features
       <section id="about" className="max-w-5xl mx-auto px-6 py-20">
         <div className="text-center mb-12">
           <h2 className="text-2xl font-bold text-charcoal">Everything you need to manage your centres</h2>
@@ -95,10 +93,10 @@ export function LandingPage() {
             accent="bg-violet-50 border-violet-100"
           />
         </div>
-      </section>
+      </section> */}
 
       {/* How it works */}
-      <section className="max-w-5xl mx-auto px-6 pb-20">
+      {/* <section className="max-w-5xl mx-auto px-6 pb-20">
         <div className="text-center mb-12">
           <h2 className="text-2xl font-bold text-charcoal">The Shichida Method</h2>
           <p className="text-text-muted mt-2">A holistic approach to early childhood development</p>
@@ -109,10 +107,10 @@ export function LandingPage() {
           <MethodStep step="art" title="Music & Art" desc="Foster creativity through songs, art, and sensory activities" />
           <MethodStep step="bond" title="Love & Bond" desc="Strengthen parent-child connection as the foundation of learning" />
         </div>
-      </section>
+      </section> */}
 
       {/* Testimonial */}
-      <section className="max-w-3xl mx-auto px-6 py-20 text-center">
+      {/* <section className="max-w-3xl mx-auto px-6 py-20 text-center">
         <div className="text-4xl mb-6">💬</div>
         <blockquote className="text-xl text-charcoal italic leading-relaxed">
           "My daughter's memory and focus have improved remarkably in just 3 months.
@@ -121,10 +119,10 @@ export function LandingPage() {
         <div className="mt-6 text-sm text-text-muted">
           <span className="font-medium text-charcoal">Priya Sharma</span> · Parent, Delhi Centre
         </div>
-      </section>
+      </section> */}
 
       {/* CTA */}
-      <section className="max-w-4xl mx-auto px-6 pb-20">
+      {/* <section className="max-w-4xl mx-auto px-6 pb-20">
         <div className="bg-gradient-to-br from-olive to-olive/90 rounded-2xl px-8 py-12 text-center text-white shadow-xl">
           <h3 className="text-2xl font-bold">Ready to get started?</h3>
           <p className="text-white/80 mt-2 max-w-md mx-auto">
@@ -137,7 +135,7 @@ export function LandingPage() {
             Open Admin Panel →
           </button>
         </div>
-      </section>
+      </section> */}
 
       {/* Footer */}
       <footer className="px-6 py-8 border-t border-border bg-white/50">

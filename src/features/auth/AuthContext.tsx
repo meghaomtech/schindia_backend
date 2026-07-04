@@ -48,7 +48,13 @@ async function apiFetch(path: string, options: RequestInit = {}) {
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.detail ?? 'Something went wrong. Please try again.');
+    const msg = data.detail
+      ?? (data.email?.[0])
+      ?? (data.password?.[0])
+      ?? (data.name?.[0])
+      ?? Object.values(data).flat()[0]
+      ?? 'Something went wrong. Please try again.';
+    throw new Error(msg as string);
   }
   return res.json();
 }
@@ -95,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const requestAccess = useCallback(async (name: string, email: string, password: string): Promise<{ status: 'pending' }> => {
-    await apiFetch('/api/auth/request-root-access/', {
+    await apiFetch('/api/auth/request-access/', {
       method: 'POST',
       body: JSON.stringify({ name, email, password }),
     });

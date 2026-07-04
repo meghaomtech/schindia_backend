@@ -57,7 +57,6 @@ export function InvoiceForm({
   const [savedCenters, setSavedCenters] = useState<SavedCenter[]>(loadSavedCentersLocal);
   const [errors, setErrors] = useState<FormErrors>({});
   const [centerSaved, setCenterSaved] = useState(false);
-  const [bankSaved, setBankSaved] = useState(false);
 
   // On mount: merge cloud centers into localStorage so latest profiles are available
   useEffect(() => {
@@ -127,12 +126,6 @@ export function InvoiceForm({
     if (saved) saveCenterToCloud(saved).catch(() => {});
   }
 
-  function saveBankAccount() {
-    if (!data.centerCode.trim()) return;
-    saveCenter();
-    setBankSaved(true);
-    setTimeout(() => setBankSaved(false), 2000);
-  }
 
   function loadCenter(centerCode: string) {
     const c = savedCenters.find((x) => x.centerCode === centerCode);
@@ -217,18 +210,21 @@ export function InvoiceForm({
                 <option key={c.id} value={c.centerCode}>{c.centerCode}</option>
               ))}
             </select>
+            {/* TODO: implement delete center later
             <button
               type="button"
               title="Delete this saved center"
               className="h-8 w-8 inline-flex items-center justify-center rounded-md text-text-muted hover:text-danger hover:bg-danger/10"
               onClick={() => {
-                const sel = document.querySelector<HTMLSelectElement>('.center-sel-v2');
-                const found = savedCenters.find((c) => c.centerCode === sel?.value);
-                if (found) deleteCenter(found.id);
+                const found = savedCenters.find((c) => c.centerCode === data.centerCode);
+                if (found && confirm(`Delete saved center "${found.centerCode}"?`)) {
+                  deleteCenter(found.id);
+                }
               }}
             >
               <TrashIcon width={14} height={14} />
             </button>
+            */}
           </div>
         )}
 
@@ -279,20 +275,7 @@ export function InvoiceForm({
           </Field>
         </div>
 
-        <div className="flex items-center gap-3 pt-1">
-          <Button type="button" variant="primary" onClick={saveCenter} className="text-sm">
-            Save Center
-          </Button>
-          {centerSaved
-            ? <span className="text-sm text-olive font-medium">✓ Saved!</span>
-            : <span className="text-xs text-text-muted">Save for quick selection next time</span>
-          }
-        </div>
-      </section>
-
-      {/* Bank Details */}
-      <section className="card p-5 space-y-4">
-        <h2 className="font-semibold">Bank Details</h2>
+        <h3 className="text-sm font-medium text-text-muted pt-2">Bank Details</h3>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Bank Name">
             <Input
@@ -324,11 +307,11 @@ export function InvoiceForm({
           </Field>
         </div>
 
-        <div className="flex items-center gap-3 pt-1">
-          <Button type="button" variant="primary" onClick={saveBankAccount} className="text-sm">
-            Save Bank Account
+        <div className="flex items-center gap-3 pt-2 border-t border-border mt-2">
+          <Button type="button" variant="primary" onClick={saveCenter} className="text-sm">
+            Save Center
           </Button>
-          {bankSaved
+          {centerSaved
             ? <span className="text-sm text-olive font-medium">✓ Saved!</span>
             : <span className="text-xs text-text-muted">Save for quick selection next time</span>
           }

@@ -198,6 +198,8 @@ export function PaymentsPage() {
                 value={form.studentName}
                 onChange={(e) => setForm({ ...form, studentName: e.target.value })}
                 placeholder="Child's name"
+                readOnly={!!form.invoiceNumber}
+                className={form.invoiceNumber ? 'bg-bg-elev cursor-not-allowed' : ''}
               />
             </Field>
             <Field label="Parent / Guardian" error={errors.parentName}>
@@ -206,6 +208,8 @@ export function PaymentsPage() {
                 onChange={(e) => setForm({ ...form, parentName: e.target.value })}
                 invalid={!!errors.parentName}
                 placeholder="Parent name"
+                readOnly={!!form.invoiceNumber}
+                className={form.invoiceNumber ? 'bg-bg-elev cursor-not-allowed' : ''}
               />
             </Field>
             <Field label="Amount (₹)" error={errors.amount}>
@@ -241,6 +245,8 @@ export function PaymentsPage() {
                 value={form.centerCode}
                 onChange={(e) => setForm({ ...form, centerCode: e.target.value })}
                 placeholder="e.g. GGN_SEC50"
+                readOnly={!!form.invoiceNumber}
+                className={form.invoiceNumber ? 'bg-bg-elev cursor-not-allowed' : ''}
               />
             </Field>
           </div>
