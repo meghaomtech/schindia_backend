@@ -14,7 +14,8 @@ function fmtDate(iso: string): string {
   return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`;
 }
 
-function formatINR(n: number): string {
+function formatINR(n: number | undefined | null): string {
+  if (n == null || isNaN(n)) return '₹ 0';
   return `₹ ${n.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 }
 
