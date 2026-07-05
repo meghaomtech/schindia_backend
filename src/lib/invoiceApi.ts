@@ -89,14 +89,15 @@ export async function deleteInvoice(invoiceNumber: string): Promise<void> {
 
 // ── Centers ────────────────────────────────────────────────────────────
 
-export async function saveCenterToCloud(center: SavedCenter): Promise<void> {
-  if (!BASE_URL) return;
+export async function saveCenterToCloud(center: SavedCenter): Promise<SavedCenter> {
+  if (!BASE_URL) throw new Error('API not configured');
   const res = await fetch(apiUrl('/centers/'), {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify(center),
   });
   if (!res.ok) throw new Error(`Center save failed: ${res.status}`);
+  return res.json();
 }
 
 export async function listCentersFromCloud(): Promise<SavedCenter[]> {

@@ -9,20 +9,7 @@ import type {
 } from './invoiceGeneratorTypes';
 import { saveCenterToCloud, listCentersFromCloud, isApiConfigured } from '@/lib/invoiceApi';
 
-const CENTERS_KEY = 'shichida_saved_centers_v2';
 const INV_COUNTER_KEY = 'shichida_inv_counter_v2';
-
-function loadSavedCentersLocal(): SavedCenter[] {
-  try {
-    return JSON.parse(localStorage.getItem(CENTERS_KEY) ?? '[]');
-  } catch {
-    return [];
-  }
-}
-
-function persistCentersLocal(centers: SavedCenter[]) {
-  localStorage.setItem(CENTERS_KEY, JSON.stringify(centers));
-}
 
 export function nextInvoiceNum(): string {
   const yr = String(new Date().getFullYear()).slice(-2);
@@ -54,24 +41,20 @@ export function InvoiceForm({
   onChange: (d: InvoiceFormData) => void;
   onGenerate: () => void;
 }) {
-  const [savedCenters, setSavedCenters] = useState<SavedCenter[]>(loadSavedCentersLocal);
+  const [savedCenters, setSavedCenters] = useState<SavedCenter[]>([]);
+  const [centersLoading, setCentersLoading] = useState(true);
   const [errors, setErrors] = useState<FormErrors>({});
   const [centerSaved, setCenterSaved] = useState(false);
 
-  // On mount: merge cloud centers into localStorage so latest profiles are available
   useEffect(() => {
-    if (!isApiConfigured()) return;
-    listCentersFromCloud().then((cloudCenters) => {
-      if (!cloudCenters.length) return;
-      const local = loadSavedCentersLocal();
-      const merged = [...local];
-      for (const cc of cloudCenters) {
-        if (!merged.find((l) => l.centerCode === cc.centerCode)) merged.push(cc);
-        else merged.splice(merged.findIndex((l) => l.centerCode === cc.centerCode), 1, cc);
-      }
-      persistCentersLocal(merged);
-      setSavedCenters(merged);
-    }).catch(() => { /* silently use localStorage if cloud is unavailable */ });
+    if (!isApiConfigured()) {
+      setCentersLoading(false);
+      return;
+    }
+    listCentersFromCloud()
+      .then(setSavedCenters)
+      .catch(() => {})
+      .finally(() => setCentersLoading(false));
   }, []);
 
   function set<K extends keyof InvoiceFormData>(key: K, value: InvoiceFormData[K]) {
@@ -79,51 +62,44 @@ export function InvoiceForm({
     if (errors[key]) setErrors((e) => ({ ...e, [key]: undefined }));
   }
 
-  function saveCenter() {
-    if (!data.centerCode.trim()) return;
+  const [centerSaving, setCenterSaving] = useState(false);
+
+  async function saveCenter() {
+    if (!data.centerCode.trim() || centerSaving) return;
     const existing = savedCenters.find((c) => c.centerCode === data.centerCode);
-    let updated: SavedCenter[];
-    if (existing) {
-      updated = savedCenters.map((c) =>
-        c.centerCode === data.centerCode
-          ? {
-              ...c,
-              centerLocation: data.centerLocation,
-              fullAddress: data.fullAddress,
-              centerEmail: data.centerEmail,
-              centerPhone: data.centerPhone,
-              gstNumber: data.gstNumber,
-              website: data.website,
-              bankName: data.bankName,
-              accountNumber: data.accountNumber,
-              ifscCode: data.ifscCode,
-              upiId: data.upiId,
-            }
-          : c
-      );
-    } else {
-      updated = [...savedCenters, {
-        id: uid(),
-        centerCode: data.centerCode,
-        centerLocation: data.centerLocation,
-        fullAddress: data.fullAddress,
-        centerEmail: data.centerEmail,
-        centerPhone: data.centerPhone,
-        gstNumber: data.gstNumber,
-        website: data.website,
-        bankName: data.bankName,
-        accountNumber: data.accountNumber,
-        ifscCode: data.ifscCode,
-        upiId: data.upiId,
-      }];
+    const centerPayload: SavedCenter = {
+      id: existing?.id ?? uid(),
+      centerCode: data.centerCode,
+      centerLocation: data.centerLocation,
+      fullAddress: data.fullAddress,
+      centerEmail: data.centerEmail,
+      centerPhone: data.centerPhone,
+      gstNumber: data.gstNumber,
+      website: data.website,
+      bankName: data.bankName,
+      accountNumber: data.accountNumber,
+      ifscCode: data.ifscCode,
+      upiId: data.upiId,
+    };
+    setCenterSaving(true);
+    try {
+      const saved = await saveCenterToCloud(centerPayload);
+      setSavedCenters((prev) => {
+        const idx = prev.findIndex((c) => c.centerCode === saved.centerCode);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = saved;
+          return next;
+        }
+        return [...prev, saved];
+      });
+      setCenterSaved(true);
+      setTimeout(() => setCenterSaved(false), 2000);
+    } catch {
+      alert('Failed to save centre. Please try again.');
+    } finally {
+      setCenterSaving(false);
     }
-    persistCentersLocal(updated);
-    setSavedCenters(updated);
-    setCenterSaved(true);
-    setTimeout(() => setCenterSaved(false), 2000);
-    // Sync to cloud (fire-and-forget — localStorage is the source of truth locally)
-    const saved = updated.find((c) => c.centerCode === data.centerCode);
-    if (saved) saveCenterToCloud(saved).catch(() => {});
   }
 
 
@@ -198,14 +174,15 @@ export function InvoiceForm({
         <h2 className="font-semibold">Center Details</h2>
         <p className="text-sm text-orange-500 font-semibold">Shichida India™</p>
 
-        {savedCenters.length > 0 && (
+        {(centersLoading || savedCenters.length > 0) && (
           <div className="flex items-center gap-2 flex-wrap">
             <select
               className="input h-8 py-0 text-xs w-44"
               defaultValue=""
+              disabled={centersLoading}
               onChange={(e) => { if (e.target.value) loadCenter(e.target.value); }}
             >
-              <option value="">Load saved center…</option>
+              <option value="">{centersLoading ? 'Loading…' : 'Load saved center…'}</option>
               {savedCenters.map((c) => (
                 <option key={c.id} value={c.centerCode}>{c.centerCode}</option>
               ))}
@@ -308,8 +285,8 @@ export function InvoiceForm({
         </div>
 
         <div className="flex items-center gap-3 pt-2 border-t border-border mt-2">
-          <Button type="button" variant="primary" onClick={saveCenter} className="text-sm">
-            Save Center
+          <Button type="button" variant="primary" onClick={saveCenter} className="text-sm" disabled={centerSaving}>
+            {centerSaving ? 'Saving…' : 'Save Center'}
           </Button>
           {centerSaved
             ? <span className="text-sm text-olive font-medium">✓ Saved!</span>
