@@ -94,11 +94,11 @@ def invoice_detail_view(request, invoice_id):
     if use_dynamo():
         from dynamo_backend.services import billing_db
 
-        # Try lookup by ID first, then by invoiceNumber field
+        # Try lookup by ID first, then by invoice_number field
         invoice = billing_db.get_invoice(invoice_id)
         if not invoice:
-            # Fallback: search by invoiceNumber field
-            all_invoices = billing_db.invoices.query_by_field('invoiceNumber', invoice_id)
+            # Fallback: search by invoice_number field
+            all_invoices = billing_db.invoices.query_by_field('invoice_number', invoice_id)
             invoice = all_invoices[0] if all_invoices else None
             if invoice:
                 invoice['items'] = billing_db.list_invoice_items(invoice['id'])
