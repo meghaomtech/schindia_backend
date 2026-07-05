@@ -26,6 +26,14 @@ jobs:
         env:
           VITE_INVOICES_API_URL: https://d2phsjh35pvdtn.cloudfront.net
 
+      - name: Clean old files
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: rm -rf /var/www/shichida-admin/* 
+
       - name: Deploy to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -35,4 +43,3 @@ jobs:
           source: "dist/*"
           target: /var/www/shichida-admin
           strip_components: 1
-          rm: true
