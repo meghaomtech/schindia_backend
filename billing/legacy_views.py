@@ -87,17 +87,32 @@ def invoices_view(request):
         return Response({'invoices': []})
 
 
-@api_view(['GET'])
+@api_view(['GET', 'DELETE'])
 @permission_classes([IsAuthenticated, IsApprovedUser])
 def invoice_detail_view(request, invoice_id):
-    """Get a single invoice by ID or number."""
+    """Get or delete a single invoice by ID or invoice number."""
     if use_dynamo():
         from dynamo_backend.services import billing_db
+
+        # Try lookup by ID first, then by invoiceNumber field
         invoice = billing_db.get_invoice(invoice_id)
         if not invoice:
+            # Fallback: search by invoiceNumber field
+            all_invoices = billing_db.invoices.query_by_field('invoiceNumber', invoice_id)
+            invoice = all_invoices[0] if all_invoices else None
+            if invoice:
+                invoice['items'] = billing_db.list_invoice_items(invoice['id'])
+
+        if not invoice:
             return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+
         is_root = getattr(request.user, 'role', '') == 'root'
         if not is_root and invoice.get('user_id') != str(request.user.id):
             return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if request.method == 'DELETE':
+            billing_db.delete_invoice(invoice['id'])
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
         return Response(invoice)
     return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
