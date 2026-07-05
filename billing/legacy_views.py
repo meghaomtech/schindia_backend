@@ -3,6 +3,7 @@ Legacy endpoints for the invoice generator feature.
 These match the old Lambda API paths: /centers, /invoices, /invoices/:id
 """
 
+import re
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -10,6 +11,27 @@ from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.router import use_dynamo
+
+
+# Field name conversion utilities
+def _to_camel(snake_str):
+    """Convert snake_case to camelCase."""
+    parts = snake_str.split('_')
+    return parts[0] + ''.join(p.capitalize() for p in parts[1:])
+
+
+def _to_snake(camel_str):
+    """Convert camelCase to snake_case."""
+    return re.sub(r'(?<!^)(?=[A-Z])', '_', camel_str).lower()
+
+
+def _convert_keys(data, converter):
+    """Convert all dict keys using the given converter function."""
+    if isinstance(data, dict):
+        return {converter(k): _convert_keys(v, converter) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_convert_keys(item, converter) for item in data]
+    return data
 
 
 # In-memory/DynamoDB store for invoice-generator centers
@@ -24,19 +46,25 @@ def centers_view(request):
 
         if request.method == 'GET':
             centres = centres_db.list_centres()
-            return Response({'centers': centres})
+            # Convert snake_case DB fields to camelCase for frontend
+            centres_camel = [_convert_keys(c, _to_camel) for c in centres]
+            return Response({'centers': centres_camel})
         else:
-            data = request.data
-            center_code = data.get('centerCode', '')
+            # Convert camelCase from frontend to snake_case for DB storage
+            data = _convert_keys(request.data, _to_snake)
+            # Remove non-updatable fields
+            data.pop('id', None)
+            data.pop('rooms', None)
+            center_code = data.get('center_code', '')
             if center_code:
                 all_centres = centres_db.list_centres()
-                existing = next((c for c in all_centres if c.get('centerCode') == center_code), None)
+                existing = next((c for c in all_centres if c.get('center_code') == center_code), None)
                 if existing:
                     centres_db.update_centre(existing['id'], data)
                     updated = centres_db.get_centre(existing['id'])
-                    return Response(updated, status=status.HTTP_200_OK)
+                    return Response(_convert_keys(updated, _to_camel), status=status.HTTP_200_OK)
             centre = centres_db.create_centre(data)
-            return Response(centre, status=status.HTTP_201_CREATED)
+            return Response(_convert_keys(centre, _to_camel), status=status.HTTP_201_CREATED)
     else:
         from centres.models import Centre
         if request.method == 'GET':
@@ -53,7 +81,7 @@ def center_delete_view(request, center_code):
     if use_dynamo():
         from dynamo_backend.services import centres_db
         all_centres = centres_db.list_centres()
-        centre = next((c for c in all_centres if c.get('system_id') == center_code or c.get('centerCode') == center_code), None)
+        centre = next((c for c in all_centres if c.get('system_id') == center_code or c.get('center_code') == center_code), None)
         if centre:
             centres_db.delete_centre(centre['id'])
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -75,13 +103,20 @@ def invoices_view(request):
                 invoices = billing_db.list_invoices()
             else:
                 invoices = billing_db.list_invoices(user_id=user_id)
-            return Response({'invoices': invoices})
+            # Convert snake_case to camelCase for frontend
+            invoices_camel = [_convert_keys(inv, _to_camel) for inv in invoices]
+            return Response({'invoices': invoices_camel})
         else:
-            data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+            # Convert camelCase from frontend to snake_case for DB
+            data = _convert_keys(request.data, _to_snake)
+            if hasattr(data, 'copy'):
+                data = data.copy()
+            else:
+                data = dict(data)
             data['user_id'] = user_id
             if isinstance(data, dict):
                 invoice = billing_db.create_invoice(data)
-                return Response(invoice, status=status.HTTP_201_CREATED)
+                return Response(_convert_keys(invoice, _to_camel), status=status.HTTP_201_CREATED)
             return Response({'detail': 'Invalid data.'}, status=status.HTTP_400_BAD_REQUEST)
     else:
         return Response({'invoices': []})
@@ -114,5 +149,5 @@ def invoice_detail_view(request, invoice_id):
             billing_db.delete_invoice(invoice['id'])
             return Response(status=status.HTTP_204_NO_CONTENT)
 
-        return Response(invoice)
+        return Response(_convert_keys(invoice, _to_camel))
     return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
