@@ -5,7 +5,7 @@ import { TrashIcon } from '@/components/ui/icons';
 import { Modal } from '@/components/ui/Modal';
 import { InvoicePreview } from './InvoicePreview';
 import { loadInvoiceHistory, deleteInvoiceFromHistory, type StoredInvoice } from './invoiceLocalStorage';
-import { isApiConfigured, listInvoices, getInvoice } from '@/lib/invoiceApi';
+import { isApiConfigured, listInvoices, getInvoice, deleteInvoice as deleteInvoiceFromApi } from '@/lib/invoiceApi';
 import type { InvoiceFormData } from './invoiceGeneratorTypes';
 
 function fmtDate(iso: string): string {
@@ -55,7 +55,16 @@ export function InvoiceHistoryPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  function handleDelete(invoiceNumber: string) {
+  async function handleDelete(invoiceNumber: string) {
+    // Delete from backend if API is configured
+    if (isApiConfigured()) {
+      try {
+        await deleteInvoiceFromApi(invoiceNumber);
+      } catch (e) {
+        console.error('Failed to delete invoice from API:', e);
+      }
+    }
+    // Always remove from local storage and state
     deleteInvoiceFromHistory(invoiceNumber);
     setInvoices((prev) => prev.filter((i) => i.invoiceNumber !== invoiceNumber));
     setConfirmDelete(null);

@@ -76,6 +76,17 @@ export async function getInvoice(invoiceNumber: string): Promise<InvoiceFormData
   return res.json();
 }
 
+export async function deleteInvoice(invoiceNumber: string): Promise<void> {
+  if (!BASE_URL) return;
+  const res = await fetch(apiUrl(`/invoices/${encodeURIComponent(invoiceNumber)}/`), {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Delete failed: ${res.status}`);
+  }
+}
+
 // ── Centers ────────────────────────────────────────────────────────────
 
 export async function saveCenterToCloud(center: SavedCenter): Promise<void> {
