@@ -20,10 +20,10 @@ DJANGO_ENV = config('DJANGO_ENV', default='local')
 
 
 def use_dynamo():
-    """Returns True if the app should use DynamoDB (production/dev on AWS)."""
-    return DJANGO_ENV in ('production', 'dev')
+    """Returns True — always use DynamoDB regardless of environment."""
+    return True
 
 
 def is_local():
-    """Returns True if running locally with SQLite."""
+    """Returns True if running locally."""
     return DJANGO_ENV == 'local'
