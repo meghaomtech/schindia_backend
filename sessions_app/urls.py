@@ -35,4 +35,9 @@ urlpatterns = [
         views.generate_slots,
         name='centre-slots-generate'
     ),
+    path(
+        'centres/<uuid:centre_pk>/timetable/',
+        views.timetable,
+        name='centre-timetable'
+    ),
 ] + router.urls

@@ -13,6 +13,9 @@ urlpatterns = [
     path('logout/', views.logout_view, name='logout'),
     path('me/', views.me, name='me'),
     path('change-password/', views.change_password, name='change-password'),
+    # OTP-based authentication (Req 21)
+    path('otp/request/', views.otp_request, name='otp-request'),
+    path('otp/verify/', views.otp_verify, name='otp-verify'),
     # Access request management (root only)
     path('access-requests/', views.access_requests_list, name='access-requests'),
     path('access-requests/<uuid:pk>/approve/', views.approve_request, name='approve-request'),

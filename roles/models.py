@@ -5,10 +5,16 @@ from centres.models import Centre
 
 
 class Role(models.Model):
+    DATA_SCOPE_CHOICES = [
+        ('all', 'All data'),
+        ('own', 'Own data only'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     centre = models.ForeignKey(Centre, on_delete=models.CASCADE, related_name='roles')
-    name = models.CharField(max_length=100)
+    name = models.CharField(max_length=50)
     description = models.TextField(blank=True)
+    data_scope = models.CharField(max_length=5, choices=DATA_SCOPE_CHOICES, default='all')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

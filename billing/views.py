@@ -8,12 +8,13 @@ from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
 from children.models import Child
-from .models import Invoice, Purchase
+from .models import Invoice, InvoiceSentTo, Purchase
 from .serializers import (
     InvoiceListSerializer,
     InvoiceCreateSerializer,
     PurchaseSerializer,
 )
+from .notifications import send_invoice_email
 
 
 class InvoiceViewSet(viewsets.ModelViewSet):
@@ -38,7 +39,19 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         return InvoiceListSerializer
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        invoice = serializer.save(user=self.request.user)
+        # Auto-send invoice email to parents (Req 23.1)
+        results = send_invoice_email(invoice)
+        for result in results:
+            InvoiceSentTo.objects.create(
+                invoice=invoice,
+                channel='email',
+                target=result['email'],
+            )
+        if results:
+            invoice.status = 'Sent'
+            invoice.sent_at = timezone.now()
+            invoice.save(update_fields=['status', 'sent_at'])
 
     @action(detail=True, methods=['post'])
     def send(self, request, pk=None):
@@ -72,6 +85,28 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice.save(update_fields=['status', 'updated_at'])
         serializer = InvoiceListSerializer(invoice)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def resend_email(self, request, pk=None):
+        """Resend invoice email to parents (Req 23.5)."""
+        invoice = self.get_object()
+        results = send_invoice_email(invoice)
+        if not results:
+            return Response(
+                {'detail': 'No parent email associated with this child.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Record sent_to entries
+        for result in results:
+            InvoiceSentTo.objects.create(
+                invoice=invoice,
+                channel='email',
+                target=result['email'],
+            )
+        return Response({
+            'detail': 'Invoice email sent.',
+            'results': results,
+        })
 
 
 @api_view(['GET'])

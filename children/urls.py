@@ -9,6 +9,17 @@ router.register(r'enrolments', views.EnrolmentViewSet, basename='enrolment-stand
 
 urlpatterns = [
     path('', include(router.urls)),
+    # Children nested under centre
+    path(
+        'centres/<uuid:centre_pk>/children/',
+        views.ChildViewSet.as_view({'get': 'list', 'post': 'create'}),
+        name='centre-children-list'
+    ),
+    path(
+        'centres/<uuid:centre_pk>/children/<uuid:pk>/',
+        views.ChildViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}),
+        name='centre-children-detail'
+    ),
     # Nested contact endpoints under child
     path(
         'children/<uuid:child_pk>/contacts/',

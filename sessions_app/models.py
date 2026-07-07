@@ -9,10 +9,10 @@ class Session(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     centre = models.ForeignKey(Centre, on_delete=models.CASCADE, related_name='sessions')
-    name = models.CharField(max_length=100)
+    name = models.CharField(max_length=50)
     child_limit = models.PositiveIntegerField(default=12)
-    age_from = models.PositiveIntegerField(default=0)
-    age_to = models.PositiveIntegerField(default=5)
+    age_from = models.PositiveIntegerField(default=0)  # in months
+    age_to = models.PositiveIntegerField(default=5)    # in months
     age_unit = models.CharField(max_length=10, choices=AGE_UNIT_CHOICES, default='years')
     duration_hours = models.PositiveIntegerField(default=1)
     duration_minutes = models.PositiveIntegerField(default=30)
@@ -23,6 +23,7 @@ class Session(models.Model):
 
     class Meta:
         ordering = ['name']
+        unique_together = ('centre', 'name')
 
     def __str__(self):
         return f"{self.name} ({self.centre.name})"

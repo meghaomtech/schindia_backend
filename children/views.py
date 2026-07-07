@@ -1,3 +1,4 @@
+from django.db import models as db_models
 from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -17,9 +18,25 @@ class ChildViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = Child.objects.prefetch_related('contacts').select_related('centre', 'session')
-        centre_id = self.request.query_params.get('centre')
+
+        # Filter by centre (query param or URL kwarg)
+        centre_id = self.request.query_params.get('centre') or self.kwargs.get('centre_pk')
         if centre_id:
             queryset = queryset.filter(centre_id=centre_id)
+
+        # Filter by session
+        session_id = self.request.query_params.get('session')
+        if session_id:
+            queryset = queryset.filter(session_id=session_id)
+
+        # Search by name
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                db_models.Q(first_name__icontains=search) |
+                db_models.Q(last_name__icontains=search)
+            )
+
         return queryset
 
     def get_serializer_class(self):

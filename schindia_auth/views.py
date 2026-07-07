@@ -441,3 +441,187 @@ def reject_request(request, pk):
         user.save(update_fields=['status'])
         serializer = AccessRequestSerializer(user)
         return Response(serializer.data)
+
+
+# =============================================================================
+# OTP-Based Authentication (Req 21)
+# =============================================================================
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def otp_request(request):
+    """
+    Request OTP for login (Req 21.1-2).
+    Sends a 6-digit code to the submitted email.
+    Returns generic message to prevent email enumeration (Req 21.10).
+    """
+    from .models import OTPToken
+    from django.core.mail import send_mail
+    from django.utils import timezone
+    import logging
+
+    logger = logging.getLogger(__name__)
+    email = request.data.get('email', '').strip().lower()
+
+    if not email:
+        return Response(
+            {'detail': 'Email address is required.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Generic response to prevent email enumeration
+    generic_response = {'detail': 'If this email is registered, you will receive an OTP.'}
+
+    # Check if email is locked (Req 21.7)
+    recent_otp = OTPToken.objects.filter(email=email).order_by('-created_at').first()
+    if recent_otp and recent_otp.is_locked:
+        return Response(
+            {'detail': 'Too many failed attempts. Please try again later.'},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    # Check cooldown (Req 21.9): don't send if last OTP was sent < 30 seconds ago
+    if recent_otp and not recent_otp.is_used:
+        elapsed = (timezone.now() - recent_otp.created_at).total_seconds()
+        if elapsed < 30:
+            return Response(
+                {'detail': 'Please wait before requesting a new OTP.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+    # Check if user exists (but always return generic message)
+    user_exists = False
+    if use_dynamo():
+        from dynamo_backend.services import auth_db
+        user = auth_db.get_user_by_email(email)
+        user_exists = user is not None
+    else:
+        user_exists = User.objects.filter(email=email).exists()
+
+    if not user_exists:
+        # Return generic message even if email not found
+        return Response(generic_response)
+
+    # Generate OTP
+    otp = OTPToken.generate(email)
+
+    # Send OTP email
+    try:
+        send_mail(
+            subject='Your Shichida India Portal Login Code',
+            message=(
+                f"Your one-time login code is: {otp.code}\n\n"
+                f"This code expires in 5 minutes.\n\n"
+                f"If you did not request this code, please ignore this email."
+            ),
+            from_email=None,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send OTP to {email}: {e}")
+
+    return Response(generic_response)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def otp_verify(request):
+    """
+    Verify OTP and authenticate (Req 21.5-7).
+    Returns JWT tokens on success.
+    """
+    from .models import OTPToken
+    from django.utils import timezone
+    from datetime import timedelta
+
+    email = request.data.get('email', '').strip().lower()
+    code = request.data.get('code', '').strip()
+
+    if not email or not code:
+        return Response(
+            {'detail': 'Email and code are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Find the most recent unused OTP for this email
+    otp = OTPToken.objects.filter(
+        email=email,
+        is_used=False,
+    ).order_by('-created_at').first()
+
+    if not otp:
+        return Response(
+            {'detail': 'Invalid or expired OTP.'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    # Check if locked
+    if otp.is_locked:
+        return Response(
+            {'detail': 'Too many failed attempts. Please try again in 15 minutes.'},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    # Check expiry (Req 21.4)
+    if otp.is_expired:
+        otp.is_used = True
+        otp.save()
+        return Response(
+            {'detail': 'OTP has expired. Please request a new one.'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    # Verify code
+    if otp.code != code:
+        otp.attempts += 1
+        # Lock after 3 failed attempts (Req 21.7)
+        if otp.attempts >= 3:
+            otp.locked_until = timezone.now() + timedelta(minutes=15)
+            otp.is_used = True
+            otp.save()
+            return Response(
+                {'detail': 'Too many failed attempts. Account locked for 15 minutes.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        otp.save()
+        return Response(
+            {'detail': 'Invalid OTP.', 'attempts_remaining': 3 - otp.attempts},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    # Success - mark OTP as used
+    otp.is_used = True
+    otp.save()
+
+    # Get user and generate tokens
+    if use_dynamo():
+        from dynamo_backend.services import auth_db
+        user_data = auth_db.get_user_by_email(email)
+        if not user_data:
+            return Response(
+                {'detail': 'User not found.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        return Response(get_tokens_for_user_data(user_data))
+    else:
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response(
+                {'detail': 'User not found.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if user.status == 'pending':
+            return Response(
+                {'detail': 'Your account is pending approval.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if user.status == 'rejected':
+            return Response(
+                {'detail': 'Your account has been rejected.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        return Response(get_tokens_for_user_data(user))

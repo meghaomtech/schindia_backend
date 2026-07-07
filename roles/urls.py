@@ -18,6 +18,23 @@ urlpatterns = [
         views.RoleViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}),
         name='centre-roles-detail'
     ),
+    # People at a centre (flat list across all roles) - Req 14
+    path(
+        'centres/<uuid:centre_pk>/people/',
+        views.centre_people,
+        name='centre-people'
+    ),
+    # Permissions matrix - Req 16
+    path(
+        'centres/<uuid:centre_pk>/permissions-matrix/',
+        views.permissions_matrix,
+        name='centre-permissions-matrix'
+    ),
+    path(
+        'centres/<uuid:centre_pk>/permissions-matrix/save/',
+        views.save_permissions_matrix,
+        name='centre-permissions-matrix-save'
+    ),
     # Permission and member management
     path(
         'roles/<uuid:role_pk>/permissions/<str:key>/',
@@ -33,5 +50,10 @@ urlpatterns = [
         'roles/<uuid:role_pk>/members/<uuid:user_pk>/',
         views.remove_member,
         name='role-member-remove'
+    ),
+    path(
+        'roles/<uuid:role_pk>/members/<uuid:user_pk>/resend-invite/',
+        views.resend_invite,
+        name='role-member-resend-invite'
     ),
 ]
