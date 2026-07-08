@@ -625,3 +625,177 @@ def otp_verify(request):
             )
 
         return Response(get_tokens_for_user_data(user))
+
+
+# =============================================================================
+# Forgot Password (Req 26.6)
+# =============================================================================
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def forgot_password(request):
+    """
+    Send a password reset OTP to the user's email.
+    Uses the same OTP mechanism but for password reset.
+    """
+    from .models import OTPToken
+    from django.core.mail import send_mail
+    import logging
+
+    logger = logging.getLogger(__name__)
+    email = request.data.get('email', '').strip().lower()
+
+    if not email:
+        return Response(
+            {'detail': 'Email address is required.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Generic response to prevent email enumeration
+    generic_response = {'detail': 'If this email is registered, you will receive a reset code.'}
+
+    # Check if user exists
+    user_exists = False
+    if use_dynamo():
+        from dynamo_backend.services import auth_db
+        user = auth_db.get_user_by_email(email)
+        user_exists = user is not None
+    else:
+        user_exists = User.objects.filter(email=email).exists()
+
+    if not user_exists:
+        return Response(generic_response)
+
+    # Generate OTP
+    otp = OTPToken.generate(email)
+
+    # Send reset email
+    try:
+        send_mail(
+            subject='Password Reset — Shichida India Portal',
+            message=(
+                f"Your password reset code is: {otp.code}\n\n"
+                f"This code expires in 5 minutes.\n\n"
+                f"If you did not request a password reset, please ignore this email."
+            ),
+            from_email=None,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send reset OTP to {email}: {e}")
+
+    return Response(generic_response)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def reset_password(request):
+    """
+    Verify OTP and set new password.
+    Body: { email, code, new_password }
+    """
+    from .models import OTPToken
+    from django.utils import timezone
+    from datetime import timedelta
+    from django.contrib.auth.hashers import make_password
+
+    email = request.data.get('email', '').strip().lower()
+    code = request.data.get('code', '').strip()
+    new_password = request.data.get('new_password', '')
+
+    if not email or not code or not new_password:
+        return Response(
+            {'detail': 'Email, code, and new_password are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if len(new_password) < 8:
+        return Response(
+            {'detail': 'Password must be at least 8 characters.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Verify OTP
+    otp = OTPToken.objects.filter(
+        email=email, is_used=False,
+    ).order_by('-created_at').first()
+
+    if not otp:
+        return Response(
+            {'detail': 'Invalid or expired reset code.'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if otp.is_expired:
+        otp.is_used = True
+        otp.save()
+        return Response(
+            {'detail': 'Reset code has expired. Please request a new one.'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if otp.code != code:
+        otp.attempts += 1
+        if otp.attempts >= 3:
+            otp.locked_until = timezone.now() + timedelta(minutes=15)
+            otp.is_used = True
+        otp.save()
+        return Response(
+            {'detail': 'Invalid reset code.'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    # Success - mark OTP as used and update password
+    otp.is_used = True
+    otp.save()
+
+    if use_dynamo():
+        from dynamo_backend.services import auth_db
+        user = auth_db.get_user_by_email(email)
+        if user:
+            auth_db.update_user(user['id'], {'password': make_password(new_password)})
+    else:
+        try:
+            user = User.objects.get(email=email)
+            user.set_password(new_password)
+            user.save()
+        except User.DoesNotExist:
+            pass
+
+    return Response({'detail': 'Password reset successful. You can now log in.'})
+
+
+# =============================================================================
+# Notification Preferences (Req 25.4)
+# =============================================================================
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def notification_preferences(request):
+    """
+    GET: Return current notification preference.
+    PATCH: Update notification preference.
+    Body for PATCH: { preference: 'all' | 'milestones' | 'none' }
+    """
+    if request.method == 'GET':
+        pref = getattr(request.user, 'notification_preference', 'all')
+        return Response({'preference': pref})
+
+    # PATCH
+    preference = request.data.get('preference', '').strip()
+    valid_choices = ['all', 'milestones', 'none']
+    if preference not in valid_choices:
+        return Response(
+            {'detail': f'Invalid preference. Must be one of: {", ".join(valid_choices)}'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if use_dynamo():
+        from dynamo_backend.services import auth_db
+        auth_db.update_user(str(request.user.id), {'notification_preference': preference})
+    else:
+        request.user.notification_preference = preference
+        request.user.save(update_fields=['notification_preference'])
+
+    return Response({'preference': preference})

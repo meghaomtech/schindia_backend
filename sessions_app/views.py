@@ -191,8 +191,9 @@ def timetable(request, centre_pk):
     """
     Return timetable data for a centre for a given week.
     Query params:
-      - week: ISO date string (YYYY-MM-DD) for the Monday of the week.
-              Defaults to current week.
+      - week: ISO date string (YYYY-MM-DD) for the Monday of the week. Defaults to current week.
+      - filter_type: 'all' | 'room' | 'session' (Req 10.5)
+      - filter_id: UUID of the room or session to filter by
     
     Returns slots grouped by day with room info, session info, 
     enrolled children count, and course progress.
@@ -228,6 +229,14 @@ def timetable(request, centre_pk):
         start_date__gte=week_start,
         start_date__lte=week_end,
     ).select_related('session', 'room').prefetch_related('children')
+
+    # Apply filters (Req 10.5)
+    filter_type = request.query_params.get('filter_type', 'all')
+    filter_id = request.query_params.get('filter_id')
+    if filter_type == 'room' and filter_id:
+        slots = slots.filter(room_id=filter_id)
+    elif filter_type == 'session' and filter_id:
+        slots = slots.filter(session_id=filter_id)
 
     # Also get recurring slots that fall within this week
     # Recurring slots have a start_date on or before this week's end

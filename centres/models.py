@@ -25,6 +25,7 @@ class Centre(models.Model):
     phone = models.CharField(max_length=15)
     email = models.EmailField()
     manager_name = models.CharField(max_length=150, blank=True)
+    max_capacity = models.PositiveIntegerField(default=100)  # Req 8.10: centre-level max children
     closure_dates = models.JSONField(default=list, blank=True)
     opening_times = models.JSONField(default=dict, blank=True)
     bank_details = models.JSONField(null=True, blank=True)

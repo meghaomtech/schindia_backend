@@ -223,8 +223,8 @@ REST_FRAMEWORK = {
 # =============================================================================
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=24),  # Req 26.1: 24-hour session
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),   # Req 26.5: 7 days for remember me
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),

@@ -1,6 +1,28 @@
 from rest_framework import serializers
 from .models import Session, SessionSlot
 
+# Predefined color palette for auto-assignment (Req 8.9)
+SESSION_COLORS = [
+    {'bg': '#e0f2fe', 'text': '#0369a1'},  # blue
+    {'bg': '#fce7f3', 'text': '#be185d'},  # pink
+    {'bg': '#dcfce7', 'text': '#166534'},  # green
+    {'bg': '#fef3c7', 'text': '#92400e'},  # amber
+    {'bg': '#ede9fe', 'text': '#5b21b6'},  # violet
+    {'bg': '#ffedd5', 'text': '#c2410c'},  # orange
+    {'bg': '#f0fdf4', 'text': '#15803d'},  # emerald
+    {'bg': '#fdf2f8', 'text': '#9d174d'},  # rose
+    {'bg': '#ecfeff', 'text': '#155e75'},  # cyan
+    {'bg': '#fef9c3', 'text': '#854d0e'},  # yellow
+    {'bg': '#f3e8ff', 'text': '#7e22ce'},  # purple
+    {'bg': '#e0e7ff', 'text': '#3730a3'},  # indigo
+]
+
+
+def get_next_color(centre_id):
+    """Get the next color in the palette based on existing session count at centre."""
+    count = Session.objects.filter(centre_id=centre_id).count()
+    return SESSION_COLORS[count % len(SESSION_COLORS)]
+
 
 class SessionSerializer(serializers.ModelSerializer):
     enrolled_count = serializers.SerializerMethodField()
@@ -15,7 +37,7 @@ class SessionSerializer(serializers.ModelSerializer):
             'color_bg', 'color_text', 'enrolled_count',
             'duration_display', 'age_range_display', 'created_at',
         ]
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'color_bg', 'color_text', 'created_at']
 
     def get_enrolled_count(self, obj):
         """Count unique children assigned to this session."""
@@ -77,6 +99,15 @@ class SessionSerializer(serializers.ModelSerializer):
                 )
 
         return data
+
+    def create(self, validated_data):
+        """Auto-assign color on session creation (Req 8.9)."""
+        centre = validated_data.get('centre')
+        if centre:
+            color = get_next_color(centre.id if hasattr(centre, 'id') else centre)
+            validated_data['color_bg'] = color['bg']
+            validated_data['color_text'] = color['text']
+        return super().create(validated_data)
 
 
 class SessionSlotSerializer(serializers.ModelSerializer):

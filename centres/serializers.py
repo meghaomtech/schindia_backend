@@ -29,8 +29,8 @@ class CentreListSerializer(serializers.ModelSerializer):
         model = Centre
         fields = [
             'id', 'system_id', 'name', 'street_address', 'city', 'postcode',
-            'vat_number', 'phone', 'email', 'manager_name', 'rooms',
-            'rooms_count', 'closure_dates', 'closure_days_count',
+            'vat_number', 'phone', 'email', 'manager_name', 'max_capacity',
+            'rooms', 'rooms_count', 'closure_dates', 'closure_days_count',
             'opening_times', 'bank_details', 'initials', 'created_at',
         ]
         read_only_fields = ['id', 'system_id', 'created_at']
@@ -118,8 +118,8 @@ class CentreCreateSerializer(serializers.ModelSerializer):
         model = Centre
         fields = [
             'id', 'system_id', 'name', 'street_address', 'city', 'postcode',
-            'vat_number', 'phone', 'email', 'manager_name', 'rooms',
-            'closure_dates', 'opening_times', 'bank_details',
+            'vat_number', 'phone', 'email', 'manager_name', 'max_capacity',
+            'rooms', 'closure_dates', 'opening_times', 'bank_details',
         ]
         read_only_fields = ['id', 'system_id']
 
@@ -207,6 +207,9 @@ class CentreCreateSerializer(serializers.ModelSerializer):
 
     def validate_bank_details(self, value):
         if not value:
+            # Req 2.9: Bank details mandatory on centre creation
+            if not self.instance:  # Only on create
+                raise serializers.ValidationError('Bank details are required when creating a centre.')
             return value
         serializer = BankDetailsSerializer(data=value)
         serializer.is_valid(raise_exception=True)

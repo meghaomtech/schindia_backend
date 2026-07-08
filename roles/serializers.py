@@ -62,7 +62,7 @@ class RoleCreateSerializer(serializers.ModelSerializer):
         return value.strip()
 
     def validate(self, data):
-        """Check role name uniqueness within centre (case-insensitive)."""
+        """Check role name uniqueness within centre (case-insensitive) and max 8 limit."""
         centre = data.get('centre') or (self.instance.centre if self.instance else None)
         name = data.get('name', '')
 
@@ -76,6 +76,15 @@ class RoleCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'name': 'A role with this name already exists at this centre.'}
                 )
+
+        # Req 14.4: Max 8 roles per centre
+        if not self.instance and centre:
+            role_count = Role.objects.filter(centre=centre).count()
+            if role_count >= 8:
+                raise serializers.ValidationError(
+                    {'name': 'Maximum 8 roles can be created per centre.'}
+                )
+
         return data
 
     def create(self, validated_data):

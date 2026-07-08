@@ -81,6 +81,7 @@ def send_invoice_email(invoice):
 def send_attendance_notification(attendance):
     """
     Send attendance notification to parents (Req 25.1).
+    Respects notification_preference (Req 25.4-5).
     """
     child = attendance.child
     session = attendance.session
@@ -106,6 +107,9 @@ def send_attendance_notification(attendance):
     )
 
     for contact in parent_contacts:
+        # Check notification preference (Req 25.4-5)
+        if _should_skip_notification(contact.email, 'attendance'):
+            continue
         try:
             send_mail(
                 subject=subject,
@@ -121,6 +125,7 @@ def send_attendance_notification(attendance):
 def send_milestone_notification(journey_entry):
     """
     Send milestone/observation notification to parents (Req 25.3).
+    Respects notification_preference (Req 25.4-5).
     """
     child = journey_entry.child
 
@@ -146,6 +151,9 @@ def send_milestone_notification(journey_entry):
     )
 
     for contact in parent_contacts:
+        # Check notification preference (Req 25.4-5)
+        if _should_skip_notification(contact.email, 'milestone'):
+            continue
         try:
             send_mail(
                 subject=subject,
@@ -156,3 +164,26 @@ def send_milestone_notification(journey_entry):
             )
         except Exception as e:
             logger.warning(f"Failed to send milestone notification to {contact.email}: {e}")
+
+
+def _should_skip_notification(email, notification_type):
+    """
+    Check if a user with this email has disabled notifications (Req 25.4-5).
+    notification_type: 'attendance' | 'milestone'
+    Returns True if notification should NOT be sent.
+    """
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+
+    try:
+        user = User.objects.get(email=email)
+        pref = getattr(user, 'notification_preference', 'all')
+
+        if pref == 'none':
+            return True  # Skip all notifications
+        if pref == 'milestones' and notification_type == 'attendance':
+            return True  # Skip attendance, only send milestones
+        return False  # Send
+    except User.DoesNotExist:
+        # Contact email not a portal user — send anyway
+        return False

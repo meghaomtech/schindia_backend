@@ -88,11 +88,20 @@ class User(AbstractUser):
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
     ]
+    NOTIFICATION_PREF_CHOICES = [
+        ('all', 'All notifications'),
+        ('milestones', 'Milestones only'),
+        ('none', 'No email notifications'),
+    ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='admin')
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    email_verified = models.BooleanField(default=False)  # Req 21: OTP email verification
+    notification_preference = models.CharField(
+        max_length=15, choices=NOTIFICATION_PREF_CHOICES, default='all'
+    )  # Req 25.4
     requested_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
