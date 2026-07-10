@@ -178,14 +178,10 @@ if DJANGO_ENV == 'production' and AWS_ACCESS_KEY_ID:
 # =============================================================================
 
 if DJANGO_ENV == 'production' and AWS_ACCESS_KEY_ID:
-    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-    EMAIL_HOST = f'email-smtp.{AWS_REGION}.amazonaws.com'
-    EMAIL_PORT = 587
-    EMAIL_USE_TLS = True
-    # SES SMTP credentials are NOT IAM access keys — generate them separately
-    # via AWS Console → SES → SMTP Settings → Create SMTP credentials
-    EMAIL_HOST_USER = config('SES_SMTP_USER', default='')
-    EMAIL_HOST_PASSWORD = config('SES_SMTP_PASSWORD', default='')
+    # Use SES via boto3 (uses IAM credentials directly, no SMTP creds needed)
+    EMAIL_BACKEND = 'django_ses.SESBackend'
+    AWS_SES_REGION_NAME = AWS_REGION
+    AWS_SES_REGION_ENDPOINT = f'email.{AWS_REGION}.amazonaws.com'
     DEFAULT_FROM_EMAIL = config('AWS_SES_SENDER', default='noreply@shichida.in')
 else:
     # Local: print emails to console
