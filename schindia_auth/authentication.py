@@ -46,6 +46,8 @@ class DynamoUser:
         self.last_name = data.get('last_name', '')
         self.role = data.get('role', 'admin')
         self.status = data.get('status', 'approved')
+        self.notification_preference = data.get('notification_preference', 'all')
+        self.email_verified = data.get('email_verified', False)
         self.is_active = data.get('is_active', True)
         self.is_authenticated = True
         self.is_anonymous = False
