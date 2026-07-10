@@ -69,6 +69,9 @@ class RegisterSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
 
     def validate_email(self, value):
+        from dynamo_backend.router import use_dynamo
+        if use_dynamo():
+            return value
         existing = User.objects.filter(email=value).first()
         if existing:
             status = getattr(existing, 'status', 'unknown')
@@ -93,6 +96,10 @@ class RequestAccessSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
 
     def validate_email(self, value):
+        from dynamo_backend.router import use_dynamo
+        if use_dynamo():
+            # Skip SQLite check — DynamoDB check happens in the view
+            return value
         existing = User.objects.filter(email=value).first()
         if existing:
             status = getattr(existing, 'status', 'unknown')
@@ -113,6 +120,9 @@ class RequestRootAccessSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
 
     def validate_email(self, value):
+        from dynamo_backend.router import use_dynamo
+        if use_dynamo():
+            return value
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("A user with this email already exists.")
         if RootAccessRequest.objects.filter(email=value, status='pending').exists():
