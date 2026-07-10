@@ -177,7 +177,7 @@ if DJANGO_ENV == 'production' and AWS_ACCESS_KEY_ID:
 # EMAIL CONFIGURATION (AWS SES for production)
 # =============================================================================
 
-if DJANGO_ENV == 'production' and AWS_ACCESS_KEY_ID:
+if DJANGO_ENV in ('production', 'dev') and AWS_ACCESS_KEY_ID:
     # Use SES via boto3 (uses IAM credentials directly, no SMTP creds needed)
     EMAIL_BACKEND = 'django_ses.SESBackend'
     AWS_SES_REGION_NAME = AWS_REGION
