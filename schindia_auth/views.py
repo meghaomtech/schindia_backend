@@ -390,13 +390,24 @@ def access_requests_list(request):
 @api_view(['PATCH'])
 @permission_classes([IsRootUser])
 def approve_request(request, pk):
-    """Approve a pending access request."""
+    """Approve a pending access request and send approval email."""
+    from django.core.mail import send_mail
+    import logging
+    logger = logging.getLogger(__name__)
+
     if use_dynamo():
         from dynamo_backend.services import auth_db
         user = auth_db.get_user_by_id(str(pk))
         if not user:
             return Response({'detail': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
         updated = auth_db.update_user(str(pk), {'status': 'approved'})
+
+        # Send approval email
+        _send_access_approved_email(
+            updated['email'],
+            f"{updated.get('first_name', '')} {updated.get('last_name', '')}".strip()
+        )
+
         return Response({
             'id': updated['id'],
             'name': f"{updated.get('first_name', '')} {updated.get('last_name', '')}".strip(),
@@ -411,8 +422,42 @@ def approve_request(request, pk):
             return Response({'detail': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
         user.status = 'approved'
         user.save(update_fields=['status'])
+
+        # Send approval email
+        _send_access_approved_email(user.email, user.get_full_name())
+
         serializer = AccessRequestSerializer(user)
         return Response(serializer.data)
+
+
+def _send_access_approved_email(email, name):
+    """Send email notifying user their access has been approved."""
+    from django.core.mail import send_mail
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        send_mail(
+            subject='Access Approved — Shichida India Portal',
+            message=(
+                f"Hi {name},\n\n"
+                f"Your access request has been approved! You can now log in to the "
+                f"Shichida India Admin Portal.\n\n"
+                f"To log in:\n"
+                f"1. Go to the portal login page\n"
+                f"2. Enter your email address\n"
+                f"3. Click 'Send OTP'\n"
+                f"4. Enter the 6-digit code sent to your email\n\n"
+                f"Welcome aboard!\n\n"
+                f"Best regards,\n"
+                f"Shichida India Admin Portal"
+            ),
+            from_email=None,
+            recipient_list=[email],
+            fail_silently=True,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send approval email to {email}: {e}")
 
 
 @api_view(['PATCH'])
