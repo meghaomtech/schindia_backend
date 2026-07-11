@@ -54,6 +54,52 @@ class SessionViewSet(viewsets.ModelViewSet):
             return Session.objects.filter(centre_id=centre_pk)
         return Session.objects.all()
 
+    def list(self, request, *args, **kwargs):
+        centre_pk = self.kwargs.get('centre_pk')
+        if use_dynamo():
+            from dynamo_backend.services import sessions_db
+            if centre_pk:
+                sessions = sessions_db.list_sessions(str(centre_pk))
+            else:
+                # Standalone: check query param
+                centre_id = request.query_params.get('centre')
+                if centre_id:
+                    sessions = sessions_db.list_sessions(str(centre_id))
+                else:
+                    sessions = []
+            return Response(sessions)
+        return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        centre_pk = self.kwargs.get('centre_pk')
+        if use_dynamo() and centre_pk:
+            from dynamo_backend.services import sessions_db
+            from .serializers import get_next_color
+            data = request.data.copy()
+            # Remove centre FK field that would fail SQLite validation
+            data.pop('centre', None)
+            # Auto-assign color
+            color = get_next_color(centre_pk)
+            data['color_bg'] = color['bg']
+            data['color_text'] = color['text']
+            session = sessions_db.create_session(str(centre_pk), data)
+            return Response(session, status=status.HTTP_201_CREATED)
+        return super().create(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import sessions_db
+            session = sessions_db.update_session(str(kwargs['pk']), request.data)
+            return Response(session)
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import sessions_db
+            sessions_db.delete_session(str(kwargs['pk']))
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return super().destroy(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         centre_pk = self.kwargs.get('centre_pk')
         if centre_pk:
@@ -74,18 +120,49 @@ class SessionSlotViewSet(viewsets.ModelViewSet):
         if centre_pk:
             queryset = queryset.filter(centre_id=centre_pk)
 
-        # Filter by week if provided
         week = self.request.query_params.get('week')
         if week:
-            from datetime import datetime
+            from datetime import datetime as dt
             try:
-                week_start = datetime.strptime(week, '%Y-%m-%d').date()
+                week_start = dt.strptime(week, '%Y-%m-%d').date()
                 week_end = week_start + timedelta(days=6)
                 queryset = queryset.filter(start_date__gte=week_start, start_date__lte=week_end)
             except ValueError:
                 pass
 
         return queryset
+
+    def list(self, request, *args, **kwargs):
+        centre_pk = self.kwargs.get('centre_pk')
+        if use_dynamo() and centre_pk:
+            from dynamo_backend.services import sessions_db
+            week = request.query_params.get('week')
+            slots = sessions_db.list_slots(str(centre_pk), week)
+            return Response(slots)
+        return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        centre_pk = self.kwargs.get('centre_pk')
+        if use_dynamo() and centre_pk:
+            from dynamo_backend.services import sessions_db
+            data = request.data.copy()
+            slot = sessions_db.create_slot(str(centre_pk), data)
+            return Response(slot, status=status.HTTP_201_CREATED)
+        return super().create(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import sessions_db
+            slot = sessions_db.update_slot(str(kwargs['pk']), request.data)
+            return Response(slot)
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import sessions_db
+            sessions_db.delete_slot(str(kwargs['pk']))
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return super().destroy(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         centre_pk = self.kwargs.get('centre_pk')

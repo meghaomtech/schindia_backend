@@ -8,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
+from dynamo_backend.router import use_dynamo
 from centres.models import Centre
 from sessions_app.models import SessionSlot
 from .models import Role, RolePermission, RoleMember
@@ -35,6 +36,32 @@ class RoleViewSet(viewsets.ModelViewSet):
         if self.action in ('create', 'update', 'partial_update'):
             return RoleCreateSerializer
         return RoleSerializer
+
+    def list(self, request, *args, **kwargs):
+        centre_pk = self.kwargs.get('centre_pk')
+        if use_dynamo() and centre_pk:
+            from dynamo_backend.services import roles_db
+            roles = roles_db.list_roles(str(centre_pk))
+            return Response(roles)
+        return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        centre_pk = self.kwargs.get('centre_pk')
+        if use_dynamo() and centre_pk:
+            from dynamo_backend.services import roles_db
+            data = request.data.copy()
+            # Remove centre field - we use the URL param
+            data.pop('centre', None)
+            role = roles_db.create_role(str(centre_pk), data)
+            return Response(role, status=status.HTTP_201_CREATED)
+        return super().create(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import roles_db
+            role = roles_db.update_role(str(kwargs['pk']), request.data.copy())
+            return Response(role)
+        return super().partial_update(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         centre_pk = self.kwargs.get('centre_pk')
@@ -106,6 +133,55 @@ def centre_people(request, centre_pk):
     Returns a flat list with user info and their role.
     Matches frontend's People tab in Roles & Permissions page (Req 14).
     """
+    if use_dynamo():
+        from dynamo_backend.services import roles_db, auth_db
+        roles = roles_db.list_roles(str(centre_pk))
+
+        people = []
+        seen_users = set()
+        for role in roles:
+            for member in role.get('members', []):
+                user_id = member.get('user_id')
+                if not user_id or user_id in seen_users:
+                    continue
+                seen_users.add(user_id)
+
+                # Look up user details from Users table
+                user = auth_db.get_user_by_id(user_id)
+                if user:
+                    name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+                    email = user.get('email', '')
+                else:
+                    name = member.get('name', '')
+                    email = member.get('email', '')
+
+                # Count active sessions (slots where this user is a teacher)
+                from dynamo_backend.services import sessions_db
+                # We'd need to scan all slots - for now return 0
+                # TODO: add teacher lookup to sessions service
+                active_sessions = 0
+
+                people.append({
+                    'id': user_id,
+                    'name': name,
+                    'email': email,
+                    'role': role.get('name', ''),
+                    'role_id': role.get('id', ''),
+                    'active_sessions': active_sessions,
+                })
+
+        # Summary counts per role
+        role_counts = {}
+        for person in people:
+            role_name = person['role']
+            role_counts[role_name] = role_counts.get(role_name, 0) + 1
+
+        return Response({
+            'total': len(people),
+            'role_counts': role_counts,
+            'people': people,
+        })
+
     try:
         centre = Centre.objects.get(pk=centre_pk)
     except Centre.DoesNotExist:
@@ -122,7 +198,6 @@ def centre_people(request, centre_pk):
         if user.id in seen_users:
             continue
         seen_users.add(user.id)
-        # Active sessions = timetable slots the person is assigned to as teacher
         active_sessions = SessionSlot.objects.filter(teachers=user).count()
         people.append({
             'id': str(user.id),
@@ -258,6 +333,14 @@ def save_permissions_matrix(request, centre_pk):
 @permission_classes([IsAuthenticated, IsApprovedUser])
 def update_permission(request, role_pk, key):
     """Update a specific permission's flags for a role."""
+    if use_dynamo():
+        from dynamo_backend.services import roles_db
+        role = roles_db.get_role(str(role_pk))
+        if not role:
+            return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+        result = roles_db.update_permission(str(role_pk), key, request.data)
+        return Response(result)
+
     try:
         role = Role.objects.get(pk=role_pk)
     except Role.DoesNotExist:
@@ -282,6 +365,38 @@ def add_member(request, role_pk):
     Add a user to a role (Req 14.6).
     Also sends onboarding email (Req 22).
     """
+    if use_dynamo():
+        from dynamo_backend.services import roles_db
+        role = roles_db.get_role(str(role_pk))
+        if not role:
+            return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        user_id = request.data.get('user') or request.data.get('user_id') or request.data.get('id')
+        name = request.data.get('name', '')
+        email = request.data.get('email', '')
+
+        if not user_id:
+            return Response(
+                {'detail': 'user or user_id is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # If name/email not provided, try to look up from Users table
+        if not name or not email:
+            from dynamo_backend.services import auth_db
+            user = auth_db.get_user_by_id(str(user_id))
+            if user:
+                name = name or f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+                email = email or user.get('email', '')
+
+        result = roles_db.add_member(str(role_pk), str(user_id), name=name, email=email)
+        if result is None:
+            return Response(
+                {'detail': 'This person already exists in this role.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        return Response(result, status=status.HTTP_201_CREATED)
+
     try:
         role = Role.objects.get(pk=role_pk)
     except Role.DoesNotExist:
@@ -335,6 +450,13 @@ def resend_invite(request, role_pk, user_pk):
 @permission_classes([IsAuthenticated, IsApprovedUser])
 def remove_member(request, role_pk, user_pk):
     """Remove a user from a role (Req 14.10-11)."""
+    if use_dynamo():
+        from dynamo_backend.services import roles_db
+        result = roles_db.remove_member(str(role_pk), str(user_pk))
+        if not result:
+            return Response({'detail': 'Member not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     try:
         member = RoleMember.objects.get(role_id=role_pk, user_id=user_pk)
     except RoleMember.DoesNotExist:

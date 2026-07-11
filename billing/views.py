@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
+from dynamo_backend.router import use_dynamo
 from children.models import Child
 from .models import Invoice, InvoiceSentTo, Purchase
 from .serializers import (
@@ -25,12 +26,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         queryset = Invoice.objects.prefetch_related('items', 'sent_to')
         if child_pk:
             queryset = queryset.filter(child_id=child_pk)
-
-        # Filter by status if provided
         invoice_status = self.request.query_params.get('status')
         if invoice_status:
             queryset = queryset.filter(status=invoice_status)
-
         return queryset
 
     def get_serializer_class(self):
@@ -38,9 +36,51 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             return InvoiceCreateSerializer
         return InvoiceListSerializer
 
+    def list(self, request, *args, **kwargs):
+        child_pk = self.kwargs.get('child_pk')
+        if use_dynamo():
+            from dynamo_backend.services import billing_db
+            if child_pk:
+                invoices = billing_db.list_invoices(child_id=str(child_pk))
+            else:
+                invoices = billing_db.list_invoices(user_id=str(request.user.id))
+            return Response(invoices)
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import billing_db
+            invoice = billing_db.get_invoice(str(kwargs['pk']))
+            if not invoice:
+                return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response(invoice)
+        return super().retrieve(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import billing_db
+            data = request.data.copy()
+            data['user_id'] = str(request.user.id)
+            invoice = billing_db.create_invoice(data)
+            return Response(invoice, status=status.HTTP_201_CREATED)
+        return super().create(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import billing_db
+            invoice = billing_db.update_invoice(str(kwargs['pk']), request.data)
+            return Response(invoice)
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import billing_db
+            billing_db.delete_invoice(str(kwargs['pk']))
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return super().destroy(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         invoice = serializer.save(user=self.request.user)
-        # Auto-send invoice email to parents (Req 23.1)
         results = send_invoice_email(invoice)
         for result in results:
             InvoiceSentTo.objects.create(
@@ -149,6 +189,36 @@ class PurchaseViewSet(viewsets.ModelViewSet):
         if child_pk:
             return Purchase.objects.filter(child_id=child_pk)
         return Purchase.objects.all()
+
+    def list(self, request, *args, **kwargs):
+        child_pk = self.kwargs.get('child_pk')
+        if use_dynamo() and child_pk:
+            from dynamo_backend.services import billing_db
+            purchases = billing_db.list_purchases(str(child_pk))
+            return Response(purchases)
+        return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        child_pk = self.kwargs.get('child_pk')
+        if use_dynamo() and child_pk:
+            from dynamo_backend.services import billing_db
+            purchase = billing_db.create_purchase(str(child_pk), request.data.copy())
+            return Response(purchase, status=status.HTTP_201_CREATED)
+        return super().create(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import billing_db
+            purchase = billing_db.update_purchase(str(kwargs['pk']), request.data)
+            return Response(purchase)
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import billing_db
+            billing_db.delete_purchase(str(kwargs['pk']))
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return super().destroy(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         child_pk = self.kwargs.get('child_pk')
