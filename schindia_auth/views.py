@@ -494,6 +494,128 @@ def reject_request(request, pk):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+def login_send_otp(request):
+    """
+    Login Step 1: Validate email + password, then send OTP.
+    Body: { email, password }
+    Returns:
+      - 200 with OTP sent message if credentials valid
+      - 401 if user not registered
+      - 401 if password doesn't match
+      - 403 if account pending/rejected
+      - 429 if locked or cooldown
+    """
+    from .models import OTPToken
+    from django.core.mail import send_mail
+    from django.utils import timezone
+    from django.contrib.auth.hashers import check_password
+    import logging
+
+    logger = logging.getLogger(__name__)
+    email = request.data.get('email', '').strip().lower()
+    password = request.data.get('password', '')
+
+    if not email:
+        return Response(
+            {'detail': 'Email address is required.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    if not password:
+        return Response(
+            {'detail': 'Password is required.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Check if email is locked (Req 21.7)
+    recent_otp = OTPToken.objects.filter(email=email).order_by('-created_at').first()
+    if recent_otp and recent_otp.is_locked:
+        return Response(
+            {'detail': 'Too many failed attempts. Please try again later.'},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    # Check cooldown (Req 21.9): don't send if last OTP was sent < 30 seconds ago
+    if recent_otp and not recent_otp.is_used:
+        elapsed = (timezone.now() - recent_otp.created_at).total_seconds()
+        if elapsed < 30:
+            return Response(
+                {'detail': 'Please wait before requesting a new OTP.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+    # Validate user exists and password matches
+    if use_dynamo():
+        from dynamo_backend.services import auth_db
+        user = auth_db.get_user_by_email(email)
+
+        if not user:
+            return Response(
+                {'detail': 'No account found with this email. Please request access first.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # Check password
+        if not auth_db.verify_password(user, password):
+            return Response(
+                {'detail': 'Invalid password.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # Check account status
+        user_status = user.get('status', 'pending')
+    else:
+        try:
+            user_obj = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response(
+                {'detail': 'No account found with this email. Please request access first.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not user_obj.check_password(password):
+            return Response(
+                {'detail': 'Invalid password.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        user_status = user_obj.status
+
+    # Check account status
+    if user_status == 'pending':
+        return Response(
+            {'detail': 'Your account is pending approval.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    if user_status == 'rejected':
+        return Response(
+            {'detail': 'Your account has been rejected.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    # Credentials valid — generate and send OTP
+    otp = OTPToken.generate(email)
+
+    try:
+        send_mail(
+            subject='Your Shichida India Portal Login Code',
+            message=(
+                f"Your one-time login code is: {otp.code}\n\n"
+                f"This code expires in 5 minutes.\n\n"
+                f"If you did not request this code, please ignore this email."
+            ),
+            from_email=None,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send OTP to {email}: {e}")
+
+    return Response({'detail': 'OTP sent to your email.'})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
 def otp_request(request):
     """
     Request OTP for login (Req 21.1-2).
