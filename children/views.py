@@ -63,8 +63,11 @@ class ChildViewSet(viewsets.ModelViewSet):
         if use_dynamo():
             from dynamo_backend.services import children_db
             data = request.data.copy()
+            # Handle centre_id from URL or body
             if self.kwargs.get('centre_pk'):
                 data['centre_id'] = str(self.kwargs['centre_pk'])
+            elif data.get('centre'):
+                data['centre_id'] = str(data.pop('centre'))
             child = children_db.create_child(data)
             return Response(child, status=status.HTTP_201_CREATED)
         return super().create(request, *args, **kwargs)
