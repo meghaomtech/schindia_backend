@@ -1,3 +1,5 @@
+import logging
+
 from django.utils import timezone
 from django.db.models import Sum, Count, Q
 
@@ -10,6 +12,8 @@ from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.router import use_dynamo
 from children.models import Child
 from .models import Invoice, InvoiceSentTo, Purchase
+
+logger = logging.getLogger(__name__)
 from .serializers import (
     InvoiceListSerializer,
     InvoiceCreateSerializer,
@@ -81,14 +85,15 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         invoice = serializer.save(user=self.request.user)
-        results = send_invoice_email(invoice)
-        for result in results:
-            InvoiceSentTo.objects.create(
-                invoice=invoice,
-                channel='email',
-                target=result['email'],
-            )
-        if results:
+        result = send_invoice_email(invoice)
+        for entry in result.get('results', []):
+            if entry['status'] == 'sent':
+                InvoiceSentTo.objects.create(
+                    invoice=invoice,
+                    channel='email',
+                    target=entry['email'],
+                )
+        if result.get('sent'):
             invoice.status = 'Sent'
             invoice.sent_at = timezone.now()
             invoice.save(update_fields=['status', 'sent_at'])
@@ -130,22 +135,33 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     def resend_email(self, request, pk=None):
         """Resend invoice email to parents (Req 23.5)."""
         invoice = self.get_object()
-        results = send_invoice_email(invoice)
-        if not results:
+        result = send_invoice_email(invoice)
+
+        if result.get('reason') == 'no_contacts':
             return Response(
                 {'detail': 'No parent email associated with this child.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # Record sent_to entries
-        for result in results:
-            InvoiceSentTo.objects.create(
-                invoice=invoice,
-                channel='email',
-                target=result['email'],
+        if result.get('reason') == 'all_failed':
+            # Log and return the actual errors
+            errors = [r.get('error') for r in result.get('results', []) if r.get('error')]
+            logger.warning(f"Invoice {invoice.id} resend failed: {errors}")
+            return Response(
+                {'detail': 'Failed to send invoice email.', 'errors': errors},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+        # Record sent_to entries
+        for entry in result.get('results', []):
+            if entry['status'] == 'sent':
+                InvoiceSentTo.objects.create(
+                    invoice=invoice,
+                    channel='email',
+                    target=entry['email'],
+                )
         return Response({
             'detail': 'Invoice email sent.',
-            'results': results,
+            'results': result.get('results', []),
         })
 
 
@@ -240,24 +256,108 @@ def centre_invoices(request, centre_pk):
     List all invoices for a centre with filtering (Req 29.8-10).
     Query params: status, date_from, date_to, search
     """
+    if use_dynamo():
+        from dynamo_backend.services import billing_db, centres_db, children_db
+        centre = centres_db.get_centre(str(centre_pk))
+        if not centre:
+            return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Get all children at this centre, then their invoices
+        children = children_db.list_children(str(centre_pk))
+        child_ids = {c['id'] for c in children}
+
+        # Get invoices for all children at this centre
+        all_invoices = []
+        for child_id in child_ids:
+            all_invoices.extend(billing_db.list_invoices(child_id=child_id))
+
+        # Apply filters
+        inv_status = request.query_params.get('status')
+        if inv_status and inv_status != 'All':
+            all_invoices = [i for i in all_invoices if i.get('status') == inv_status]
+
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        if date_from:
+            all_invoices = [i for i in all_invoices if (i.get('invoice_date') or '') >= date_from]
+        if date_to:
+            all_invoices = [i for i in all_invoices if (i.get('invoice_date') or '') <= date_to]
+
+        search = request.query_params.get('search')
+        if search:
+            search_lower = search.lower()
+            all_invoices = [
+                i for i in all_invoices
+                if search_lower in (i.get('student_name') or '').lower()
+                or search_lower in (i.get('number') or '').lower()
+            ]
+
+        # Summary stats (computed over all centre invoices before user filters)
+        # Re-fetch unfiltered for summary
+        all_centre_invoices = []
+        for child_id in child_ids:
+            all_centre_invoices.extend(billing_db.list_invoices(child_id=child_id))
+
+        total_outstanding = sum(
+            float(i.get('total_amount', 0))
+            for i in all_centre_invoices
+            if i.get('status') in ('Sent', 'Draft', 'Overdue')
+        )
+        total_paid = sum(
+            float(i.get('total_amount', 0))
+            for i in all_centre_invoices
+            if i.get('status') == 'Paid'
+        )
+        overdue_count = sum(1 for i in all_centre_invoices if i.get('status') == 'Overdue')
+
+        return Response({
+            'summary': {
+                'total_invoices': len(all_centre_invoices),
+                'total_outstanding': total_outstanding,
+                'total_paid': total_paid,
+                'overdue_count': overdue_count,
+            },
+            'invoices': all_invoices,
+        })
+
+    # ORM path
     from centres.models import Centre
+    from django.shortcuts import get_object_or_404
+    centre = get_object_or_404(Centre, pk=centre_pk)
 
-    try:
-        centre = Centre.objects.get(pk=centre_pk)
-    except Centre.DoesNotExist:
-        return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
+    # Validate date params
+    date_from = request.query_params.get('date_from')
+    date_to = request.query_params.get('date_to')
+    if date_from:
+        try:
+            from datetime import datetime
+            datetime.strptime(date_from, '%Y-%m-%d')
+        except ValueError:
+            return Response({'detail': 'Invalid date_from format. Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+    if date_to:
+        try:
+            from datetime import datetime
+            datetime.strptime(date_to, '%Y-%m-%d')
+        except ValueError:
+            return Response({'detail': 'Invalid date_to format. Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    invoices = Invoice.objects.filter(
-        child__centre=centre
-    ).prefetch_related('items', 'sent_to').select_related('child')
+    # Summary stats over ALL centre invoices (before user filters)
+    all_centre_invoices = Invoice.objects.filter(child__centre=centre)
+    total_outstanding = all_centre_invoices.filter(
+        status__in=['Sent', 'Draft', 'Overdue']
+    ).aggregate(total=Sum('total_amount'))['total'] or 0
+    total_paid = all_centre_invoices.filter(
+        status='Paid'
+    ).aggregate(total=Sum('total_amount'))['total'] or 0
+    overdue_count = all_centre_invoices.filter(status='Overdue').count()
+    total_count = all_centre_invoices.count()
 
-    # Filters (Req 29.9)
+    # Filtered queryset for the response list
+    invoices = all_centre_invoices.prefetch_related('items', 'sent_to').select_related('child')
+
     inv_status = request.query_params.get('status')
     if inv_status and inv_status != 'All':
         invoices = invoices.filter(status=inv_status)
-
-    date_from = request.query_params.get('date_from')
-    date_to = request.query_params.get('date_to')
     if date_from:
         invoices = invoices.filter(invoice_date__gte=date_from)
     if date_to:
@@ -271,17 +371,6 @@ def centre_invoices(request, centre_pk):
             Q(number__icontains=search)
         )
 
-    # Summary statistics (Req 29.10)
-    total_count = invoices.count()
-    total_outstanding = invoices.filter(
-        status__in=['Sent', 'Draft', 'Overdue']
-    ).aggregate(total=Sum('total_amount'))['total'] or 0
-    total_paid = invoices.filter(
-        status='Paid'
-    ).aggregate(total=Sum('total_amount'))['total'] or 0
-    overdue_count = invoices.filter(status='Overdue').count()
-
-    # Serialize
     serializer = InvoiceListSerializer(invoices, many=True)
 
     return Response({
@@ -302,14 +391,67 @@ def invoice_generate_data(request, centre_pk):
     Return pre-populated data for invoice generation (Req 29.3, 29.7, 30.1-2).
     Returns centre details + list of children at this centre with parent info.
     """
+    if use_dynamo():
+        from dynamo_backend.services import centres_db, children_db
+        centre = centres_db.get_centre(str(centre_pk))
+        if not centre:
+            return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        bank = centre.get('bank_details', {}) or {}
+        centre_data = {
+            'centre_code': centre.get('system_id', ''),
+            'centre_name': centre.get('name', ''),
+            'centre_location': centre.get('city', ''),
+            'full_address': f"{centre.get('street_address', '')}, {centre.get('city', '')}, {centre.get('postcode', '')}",
+            'email': centre.get('email', ''),
+            'phone': centre.get('phone', ''),
+            'gst_number': centre.get('vat_number', ''),
+            'bank_name': bank.get('bank_name', ''),
+            'account_number': bank.get('account_number', ''),
+            'ifsc_code': bank.get('ifsc_code', ''),
+            'upi_id': bank.get('upi_id', ''),
+            'account_holder_name': bank.get('account_holder_name', ''),
+        }
+
+        children = children_db.list_children(str(centre_pk))
+        children_data = []
+        for child in children:
+            name_parts = [child.get('first_name', ''), child.get('middle_name', ''), child.get('last_name', '')]
+            student_name = ' '.join(p for p in name_parts if p)
+            # Find parent contact
+            contacts = child.get('contacts', [])
+            parent = next(
+                (c for c in contacts if c.get('invite_as') in ('Parent', 'Guardian')),
+                None
+            )
+            children_data.append({
+                'id': child.get('id', ''),
+                'student_name': student_name,
+                'parent_name': parent.get('name', '') if parent else '',
+                'parent_email': parent.get('email', '') if parent else '',
+                'parent_phone': parent.get('phone', '') if parent else '',
+                'session_name': child.get('session_name', ''),
+                'date_of_birth': child.get('date_of_birth', ''),
+            })
+
+        bank_details_complete = bool(
+            bank.get('account_holder_name') and
+            bank.get('bank_name') and
+            bank.get('account_number') and
+            bank.get('ifsc_code')
+        )
+
+        return Response({
+            'centre': centre_data,
+            'children': children_data,
+            'bank_details_complete': bank_details_complete,
+        })
+
+    # ORM path
     from centres.models import Centre
+    from django.shortcuts import get_object_or_404
+    centre = get_object_or_404(Centre, pk=centre_pk)
 
-    try:
-        centre = Centre.objects.get(pk=centre_pk)
-    except Centre.DoesNotExist:
-        return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-    # Centre details auto-populated (Req 29.3)
     bank = centre.bank_details or {}
     centre_data = {
         'centre_code': centre.system_id,
@@ -326,21 +468,20 @@ def invoice_generate_data(request, centre_pk):
         'account_holder_name': bank.get('account_holder_name', ''),
     }
 
-    # Children at this centre with parent info (Req 30.1-2)
     children = Child.objects.filter(
         centre=centre
     ).prefetch_related('contacts').select_related('session')
 
     children_data = []
     for child in children:
-        # Find parent contact
         parent = child.contacts.filter(
             invite_as__in=['Parent', 'Guardian']
         ).first()
 
+        student_name = ' '.join(p for p in [child.first_name, child.middle_name, child.last_name] if p)
         children_data.append({
             'id': str(child.id),
-            'student_name': f"{child.first_name} {child.middle_name} {child.last_name}".replace('  ', ' ').strip(),
+            'student_name': student_name,
             'parent_name': parent.name if parent else '',
             'parent_email': parent.email if parent else '',
             'parent_phone': parent.phone if parent else '',
@@ -348,11 +489,11 @@ def invoice_generate_data(request, centre_pk):
             'date_of_birth': child.date_of_birth.isoformat(),
         })
 
-    # Check if bank details are configured (Req 18.6)
     bank_details_complete = bool(
         bank.get('account_holder_name') and
         bank.get('bank_name') and
-        bank.get('account_number')
+        bank.get('account_number') and
+        bank.get('ifsc_code')
     )
 
     return Response({

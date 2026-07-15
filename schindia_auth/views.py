@@ -4,10 +4,12 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import get_user_model
+from django.core.mail import send_mail
 from django.utils import timezone
 
+import logging
+
 from .serializers import (
-    RegisterSerializer,
     RequestAccessSerializer,
     RequestRootAccessSerializer,
     LoginSerializer,
@@ -19,6 +21,7 @@ from .permissions import IsRootUser
 from dynamo_backend.router import use_dynamo
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 def get_tokens_for_user_data(user_data):
@@ -49,65 +52,6 @@ def get_tokens_for_user_data(user_data):
                 'role': user_data.role,
             }
         }
-
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def register(request):
-    """Register a new user with immediate approval (returns JWT)."""
-    if use_dynamo():
-        from dynamo_backend.services import auth_db
-
-        serializer = RegisterSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        name_parts = serializer.validated_data['name'].split(' ', 1)
-        first_name = name_parts[0]
-        last_name = name_parts[1] if len(name_parts) > 1 else ''
-
-        existing = auth_db.get_user_by_email(serializer.validated_data['email'])
-        if existing:
-            user_status = existing.get('status', 'unknown')
-            if user_status == 'pending':
-                msg = 'An access request with this email is already pending approval.'
-            elif user_status == 'approved':
-                msg = 'An account with this email already exists. Please log in instead.'
-            elif user_status == 'rejected':
-                msg = 'A previous request with this email was rejected. Please contact the administrator.'
-            else:
-                msg = 'A user with this email already exists.'
-            return Response(
-                {'detail': msg},
-                status=status.HTTP_409_CONFLICT
-            )
-
-        user = auth_db.create_user(
-            email=serializer.validated_data['email'],
-            password=serializer.validated_data['password'],
-            first_name=first_name,
-            last_name=last_name,
-            role='admin',
-            status='approved',
-        )
-        return Response(get_tokens_for_user_data(user), status=status.HTTP_201_CREATED)
-    else:
-        serializer = RegisterSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        name_parts = serializer.validated_data['name'].split(' ', 1)
-        first_name = name_parts[0]
-        last_name = name_parts[1] if len(name_parts) > 1 else ''
-
-        user = User.objects.create_user(
-            username=serializer.validated_data['email'],
-            email=serializer.validated_data['email'],
-            password=serializer.validated_data['password'],
-            first_name=first_name,
-            last_name=last_name,
-            role='admin',
-            status='approved',
-        )
-        return Response(get_tokens_for_user_data(user), status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])
@@ -229,8 +173,6 @@ def request_root_access(request):
 @permission_classes([AllowAny])
 def login_view(request):
     """Login with email/password."""
-    import logging
-    logger = logging.getLogger(__name__)
     serializer = LoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
 
@@ -314,53 +256,16 @@ def me(request):
     if use_dynamo():
         from dynamo_backend.services import auth_db
         user = auth_db.get_user_by_id(str(request.user.id))
-        if user:
-            return Response({
-                'id': user['id'],
-                'name': f"{user.get('first_name', '')} {user.get('last_name', '')}".strip(),
-                'email': user['email'],
-                'role': user.get('role', 'admin'),
-                'status': user.get('status', 'approved'),
-                'requested_at': user.get('requested_at'),
-            })
+        if not user:
+            return Response(
+                {'detail': 'User not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        # Use UserSerializer with the DynamoUser object — it handles both paths
+        serializer = UserSerializer(request.user)
+        return Response(serializer.data)
     serializer = UserSerializer(request.user)
     return Response(serializer.data)
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def change_password(request):
-    """Change the current user's password."""
-    old_password = request.data.get('old_password', '')
-    new_password = request.data.get('new_password', '')
-
-    if not old_password or not new_password:
-        return Response(
-            {'detail': 'old_password and new_password are required.'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    if use_dynamo():
-        from dynamo_backend.services import auth_db
-        from django.contrib.auth.hashers import make_password
-
-        user = auth_db.get_user_by_id(str(request.user.id))
-        if not user or not auth_db.verify_password(user, old_password):
-            return Response(
-                {'detail': 'Current password is incorrect.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        auth_db.update_user(str(request.user.id), {'password': make_password(new_password)})
-        return Response({'detail': 'Password changed successfully.'})
-    else:
-        if not request.user.check_password(old_password):
-            return Response(
-                {'detail': 'Current password is incorrect.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        request.user.set_password(new_password)
-        request.user.save()
-        return Response({'detail': 'Password changed successfully.'})
 
 
 @api_view(['GET'])
@@ -391,10 +296,6 @@ def access_requests_list(request):
 @permission_classes([IsRootUser])
 def approve_request(request, pk):
     """Approve a pending access request and send approval email."""
-    from django.core.mail import send_mail
-    import logging
-    logger = logging.getLogger(__name__)
-
     if use_dynamo():
         from dynamo_backend.services import auth_db
         user = auth_db.get_user_by_id(str(pk))
@@ -432,10 +333,6 @@ def approve_request(request, pk):
 
 def _send_access_approved_email(email, name):
     """Send email notifying user their access has been approved."""
-    from django.core.mail import send_mail
-    import logging
-    logger = logging.getLogger(__name__)
-
     try:
         send_mail(
             subject='Access Approved — Shichida India Portal',
@@ -501,11 +398,7 @@ def otp_request(request):
     Returns generic message to prevent email enumeration (Req 21.10).
     """
     from .models import OTPToken
-    from django.core.mail import send_mail
-    from django.utils import timezone
-    import logging
 
-    logger = logging.getLogger(__name__)
     email = request.data.get('email', '').strip().lower()
 
     if not email:
@@ -517,24 +410,7 @@ def otp_request(request):
     # Generic response to prevent email enumeration
     generic_response = {'detail': 'If this email is registered, you will receive an OTP.'}
 
-    # Check if email is locked (Req 21.7)
-    recent_otp = OTPToken.objects.filter(email=email).order_by('-created_at').first()
-    if recent_otp and recent_otp.is_locked:
-        return Response(
-            {'detail': 'Too many failed attempts. Please try again later.'},
-            status=status.HTTP_429_TOO_MANY_REQUESTS,
-        )
-
-    # Check cooldown (Req 21.9): don't send if last OTP was sent < 30 seconds ago
-    if recent_otp and not recent_otp.is_used:
-        elapsed = (timezone.now() - recent_otp.created_at).total_seconds()
-        if elapsed < 30:
-            return Response(
-                {'detail': 'Please wait before requesting a new OTP.'},
-                status=status.HTTP_429_TOO_MANY_REQUESTS,
-            )
-
-    # Check if user exists (but always return generic message)
+    # Check if user exists first (but always return generic message if not)
     user_exists = False
     if use_dynamo():
         from dynamo_backend.services import auth_db
@@ -546,6 +422,24 @@ def otp_request(request):
     if not user_exists:
         # Return generic message even if email not found
         return Response(generic_response)
+
+    # Check if email is locked (Req 21.7) — keyed on email, not per-row
+    # Moved after user-existence check so 429 doesn't leak email registration status
+    if OTPToken.is_email_locked(email):
+        return Response(
+            {'detail': 'Too many failed attempts. Please try again later.'},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    # Check cooldown (Req 21.9): don't send if last OTP was sent < 30 seconds ago
+    recent_otp = OTPToken.objects.filter(email=email).order_by('-created_at').first()
+    if recent_otp and not recent_otp.is_used:
+        elapsed = (timezone.now() - recent_otp.created_at).total_seconds()
+        if elapsed < 30:
+            return Response(
+                {'detail': 'Please wait before requesting a new OTP.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
 
     # Generate OTP
     otp = OTPToken.generate(email)
@@ -577,7 +471,6 @@ def otp_verify(request):
     Returns JWT tokens on success.
     """
     from .models import OTPToken
-    from django.utils import timezone
     from datetime import timedelta
 
     email = request.data.get('email', '').strip().lower()
@@ -601,8 +494,8 @@ def otp_verify(request):
             status=status.HTTP_401_UNAUTHORIZED,
         )
 
-    # Check if locked
-    if otp.is_locked:
+    # Check if email is locked (keyed on email, not per-row)
+    if OTPToken.is_email_locked(email):
         return Response(
             {'detail': 'Too many failed attempts. Please try again in 15 minutes.'},
             status=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -617,9 +510,11 @@ def otp_verify(request):
             status=status.HTTP_401_UNAUTHORIZED,
         )
 
-    # Verify code
-    if otp.code != code:
-        otp.attempts += 1
+    # Verify code (hashed comparison)
+    if not otp.verify_code(code):
+        from django.db.models import F
+        OTPToken.objects.filter(pk=otp.pk).update(attempts=F('attempts') + 1)
+        otp.refresh_from_db()
         # Lock after 3 failed attempts (Req 21.7)
         if otp.attempts >= 3:
             otp.locked_until = timezone.now() + timedelta(minutes=15)
@@ -629,13 +524,12 @@ def otp_verify(request):
                 {'detail': 'Too many failed attempts. Account locked for 15 minutes.'},
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
-        otp.save()
         return Response(
             {'detail': 'Invalid OTP.', 'attempts_remaining': 3 - otp.attempts},
             status=status.HTTP_401_UNAUTHORIZED,
         )
 
-    # Success - mark OTP as used
+    # Success - mark OTP as used and set email_verified
     otp.is_used = True
     otp.save()
 
@@ -648,6 +542,22 @@ def otp_verify(request):
                 {'detail': 'User not found.'},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+
+        if user_data.get('status') == 'pending':
+            return Response(
+                {'detail': 'Your account is pending approval.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if user_data.get('status') == 'rejected':
+            return Response(
+                {'detail': 'Your account has been rejected.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Mark email as verified on successful OTP login
+        if not user_data.get('email_verified'):
+            auth_db.update_user(user_data['id'], {'email_verified': True})
+
         return Response(get_tokens_for_user_data(user_data))
     else:
         try:
@@ -669,6 +579,11 @@ def otp_verify(request):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # Mark email as verified on successful OTP login
+        if not user.email_verified:
+            user.email_verified = True
+            user.save(update_fields=['email_verified'])
+
         return Response(get_tokens_for_user_data(user))
 
 
@@ -684,10 +599,7 @@ def forgot_password(request):
     Uses the same OTP mechanism but for password reset.
     """
     from .models import OTPToken
-    from django.core.mail import send_mail
-    import logging
 
-    logger = logging.getLogger(__name__)
     email = request.data.get('email', '').strip().lower()
 
     if not email:
@@ -741,7 +653,6 @@ def reset_password(request):
     Body: { email, code, new_password }
     """
     from .models import OTPToken
-    from django.utils import timezone
     from datetime import timedelta
     from django.contrib.auth.hashers import make_password
 
@@ -772,6 +683,12 @@ def reset_password(request):
             status=status.HTTP_401_UNAUTHORIZED,
         )
 
+    if OTPToken.is_email_locked(email):
+        return Response(
+            {'detail': 'Too many failed attempts. Please try again later.'},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
     if otp.is_expired:
         otp.is_used = True
         otp.save()
@@ -780,12 +697,14 @@ def reset_password(request):
             status=status.HTTP_401_UNAUTHORIZED,
         )
 
-    if otp.code != code:
-        otp.attempts += 1
+    if not otp.verify_code(code):
+        from django.db.models import F
+        OTPToken.objects.filter(pk=otp.pk).update(attempts=F('attempts') + 1)
+        otp.refresh_from_db()
         if otp.attempts >= 3:
             otp.locked_until = timezone.now() + timedelta(minutes=15)
             otp.is_used = True
-        otp.save()
+            otp.save()
         return Response(
             {'detail': 'Invalid reset code.'},
             status=status.HTTP_401_UNAUTHORIZED,
@@ -798,11 +717,25 @@ def reset_password(request):
     if use_dynamo():
         from dynamo_backend.services import auth_db
         user = auth_db.get_user_by_email(email)
-        if user:
-            auth_db.update_user(user['id'], {'password': make_password(new_password)})
+        if not user:
+            return Response(
+                {'detail': 'User not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if user.get('status') not in ('approved',):
+            return Response(
+                {'detail': 'Account is not active. Cannot reset password.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        auth_db.update_user(user['id'], {'password': make_password(new_password)})
     else:
         try:
             user = User.objects.get(email=email)
+            if user.status not in ('approved',):
+                return Response(
+                    {'detail': 'Account is not active. Cannot reset password.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             user.set_password(new_password)
             user.save()
         except User.DoesNotExist:

@@ -16,7 +16,7 @@ from .tables import (
     ENROLMENTS_TABLE, JOURNEY_TABLE, NOTES_TABLE,
     INVOICES_TABLE, INVOICE_ITEMS_TABLE, PURCHASES_TABLE,
     ROLES_TABLE, ROLE_PERMISSIONS_TABLE, ROLE_MEMBERS_TABLE,
-    ATTENDANCE_TABLE, COURSE_PROGRESS_TABLE, OTP_TABLE,
+    ATTENDANCE_TABLE, COURSE_PROGRESS_TABLE,
 )
 
 
@@ -87,13 +87,19 @@ TABLE_DEFINITIONS = [
         'AttributeDefinitions': [
             {'AttributeName': 'id', 'AttributeType': 'S'},
             {'AttributeName': 'centre_id', 'AttributeType': 'S'},
+            {'AttributeName': 'room_id', 'AttributeType': 'S'},
         ],
         'GlobalSecondaryIndexes': [
             {
                 'IndexName': 'centre_id-index',
                 'KeySchema': [{'AttributeName': 'centre_id', 'KeyType': 'HASH'}],
                 'Projection': {'ProjectionType': 'ALL'},
-            }
+            },
+            {
+                'IndexName': 'room_id-index',
+                'KeySchema': [{'AttributeName': 'room_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            },
         ],
     },
     {
@@ -286,44 +292,38 @@ TABLE_DEFINITIONS = [
         'AttributeDefinitions': [
             {'AttributeName': 'id', 'AttributeType': 'S'},
             {'AttributeName': 'child_id', 'AttributeType': 'S'},
+            {'AttributeName': 'date', 'AttributeType': 'S'},
+            {'AttributeName': 'slot_id', 'AttributeType': 'S'},
+            {'AttributeName': 'session_id', 'AttributeType': 'S'},
         ],
         'GlobalSecondaryIndexes': [
             {
                 'IndexName': 'child_id-index',
-                'KeySchema': [{'AttributeName': 'child_id', 'KeyType': 'HASH'}],
+                'KeySchema': [
+                    {'AttributeName': 'child_id', 'KeyType': 'HASH'},
+                    {'AttributeName': 'date', 'KeyType': 'RANGE'},
+                ],
                 'Projection': {'ProjectionType': 'ALL'},
-            }
+            },
+            {
+                'IndexName': 'slot_id-index',
+                'KeySchema': [{'AttributeName': 'slot_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            },
+            {
+                'IndexName': 'session_id-index',
+                'KeySchema': [{'AttributeName': 'session_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            },
         ],
     },
     {
         'TableName': COURSE_PROGRESS_TABLE,
-        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'KeySchema': [{'AttributeName': 'child_id', 'KeyType': 'HASH'}],
         'AttributeDefinitions': [
-            {'AttributeName': 'id', 'AttributeType': 'S'},
             {'AttributeName': 'child_id', 'AttributeType': 'S'},
         ],
-        'GlobalSecondaryIndexes': [
-            {
-                'IndexName': 'child_id-index',
-                'KeySchema': [{'AttributeName': 'child_id', 'KeyType': 'HASH'}],
-                'Projection': {'ProjectionType': 'ALL'},
-            }
-        ],
-    },
-    {
-        'TableName': OTP_TABLE,
-        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
-        'AttributeDefinitions': [
-            {'AttributeName': 'id', 'AttributeType': 'S'},
-            {'AttributeName': 'email', 'AttributeType': 'S'},
-        ],
-        'GlobalSecondaryIndexes': [
-            {
-                'IndexName': 'email-index',
-                'KeySchema': [{'AttributeName': 'email', 'KeyType': 'HASH'}],
-                'Projection': {'ProjectionType': 'ALL'},
-            }
-        ],
+        # No GSI needed — 1:1 relationship, direct get/put by child_id
     },
 ]
 

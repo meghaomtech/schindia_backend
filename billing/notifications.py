@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 def send_invoice_email(invoice):
     """
     Send invoice email to all parents linked to the child (Req 23.1-3).
-    Returns list of {'email': ..., 'status': 'sent'|'failed'}.
+    Returns list of {'email': ..., 'status': 'sent'|'failed', 'error': ...}.
+    Returns empty list with a reason if no contacts found.
     """
     child = invoice.child
     centre = child.centre
@@ -27,9 +28,9 @@ def send_invoice_email(invoice):
         logger.warning(
             f"No parent email for child {child.id} - invoice {invoice.number} not sent."
         )
-        return []
+        return {'sent': False, 'reason': 'no_contacts', 'results': []}
 
-    subject = f"Invoice {invoice.number} — {centre.name}"
+    subject = f"Invoice for {child.first_name} {child.last_name} — {centre.name}"
 
     # Build bank details text
     bank_text = ""
@@ -70,12 +71,45 @@ def send_invoice_email(invoice):
                 recipient_list=[contact.email],
                 fail_silently=False,
             )
-            results.append({'email': contact.email, 'status': 'sent'})
+            results.append({'email': contact.email, 'status': 'sent', 'error': None})
         except Exception as e:
             logger.warning(f"Failed to send invoice email to {contact.email}: {e}")
-            results.append({'email': contact.email, 'status': 'failed'})
+            results.append({'email': contact.email, 'status': 'failed', 'error': str(e)})
 
-    return results
+    any_sent = any(r['status'] == 'sent' for r in results)
+    return {'sent': any_sent, 'reason': None if any_sent else 'all_failed', 'results': results}
+
+
+def _send_to_parent_contacts(child, subject, message, notification_type):
+    """
+    Common helper: send an email to all parent/guardian contacts of a child,
+    respecting notification preferences (Req 25.4-5).
+    """
+    parent_contacts = child.contacts.filter(
+        invite_as__in=['Parent', 'Guardian', 'Carer'],
+        email__isnull=False,
+    ).exclude(email='')
+
+    if not parent_contacts.exists():
+        logger.warning(
+            f"No parent contacts with email for child {child.id} — "
+            f"{notification_type} notification not sent."
+        )
+        return
+
+    for contact in parent_contacts:
+        if _should_skip_notification(contact.email, notification_type):
+            continue
+        try:
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=None,
+                recipient_list=[contact.email],
+                fail_silently=True,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send {notification_type} notification to {contact.email}: {e}")
 
 
 def send_attendance_notification(attendance):
@@ -86,14 +120,6 @@ def send_attendance_notification(attendance):
     child = attendance.child
     session = attendance.session
     teacher_name = attendance.teacher.get_full_name() if attendance.teacher else 'Unknown'
-
-    parent_contacts = child.contacts.filter(
-        invite_as__in=['Parent', 'Guardian', 'Carer'],
-        email__isnull=False,
-    ).exclude(email='')
-
-    if not parent_contacts.exists():
-        return
 
     subject = f"Attendance Confirmed — {child.first_name}"
     message = (
@@ -106,20 +132,7 @@ def send_attendance_notification(attendance):
         f"{child.centre.name}"
     )
 
-    for contact in parent_contacts:
-        # Check notification preference (Req 25.4-5)
-        if _should_skip_notification(contact.email, 'attendance'):
-            continue
-        try:
-            send_mail(
-                subject=subject,
-                message=message,
-                from_email=None,
-                recipient_list=[contact.email],
-                fail_silently=True,
-            )
-        except Exception as e:
-            logger.warning(f"Failed to send attendance notification to {contact.email}: {e}")
+    _send_to_parent_contacts(child, subject, message, 'attendance')
 
 
 def send_milestone_notification(journey_entry):
@@ -128,16 +141,8 @@ def send_milestone_notification(journey_entry):
     Respects notification_preference (Req 25.4-5).
     """
     child = journey_entry.child
-
-    parent_contacts = child.contacts.filter(
-        invite_as__in=['Parent', 'Guardian', 'Carer'],
-        email__isnull=False,
-    ).exclude(email='')
-
-    if not parent_contacts.exists():
-        return
-
     entry_type = journey_entry.type
+
     subject = f"New {entry_type} — {child.first_name}"
     message = (
         f"Dear Parent/Guardian,\n\n"
@@ -150,20 +155,7 @@ def send_milestone_notification(journey_entry):
         f"{child.centre.name}"
     )
 
-    for contact in parent_contacts:
-        # Check notification preference (Req 25.4-5)
-        if _should_skip_notification(contact.email, 'milestone'):
-            continue
-        try:
-            send_mail(
-                subject=subject,
-                message=message,
-                from_email=None,
-                recipient_list=[contact.email],
-                fail_silently=True,
-            )
-        except Exception as e:
-            logger.warning(f"Failed to send milestone notification to {contact.email}: {e}")
+    _send_to_parent_contacts(child, subject, message, 'milestone')
 
 
 def _should_skip_notification(email, notification_type):

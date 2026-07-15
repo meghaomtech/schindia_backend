@@ -4,6 +4,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from .models import Child, Contact, ChildEnrolment
+from progress.models import CourseProgress
 
 
 class ContactSerializer(serializers.ModelSerializer):
@@ -32,7 +33,7 @@ class ContactSerializer(serializers.ModelSerializer):
 class ChildListSerializer(serializers.ModelSerializer):
     contacts = ContactSerializer(many=True, read_only=True)
     session_name = serializers.CharField(source='session.name', read_only=True, default=None)
-    centre_name = serializers.CharField(source='centre.name', read_only=True)
+    centre_name = serializers.CharField(source='centre.name', read_only=True, default='')
     age_display = serializers.SerializerMethodField()
     course_progress = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
@@ -49,10 +50,11 @@ class ChildListSerializer(serializers.ModelSerializer):
 
     def get_age_display(self, obj):
         from datetime import date
+        from dateutil.relativedelta import relativedelta
         today = date.today()
-        delta = today - obj.date_of_birth
-        years = delta.days // 365
-        months = (delta.days % 365) // 30
+        rd = relativedelta(today, obj.date_of_birth)
+        years = rd.years
+        months = rd.months
         if years > 0:
             parts = [f"{years} year{'s' if years != 1 else ''}"]
             if months > 0:
@@ -62,15 +64,28 @@ class ChildListSerializer(serializers.ModelSerializer):
 
     def get_course_progress(self, obj):
         try:
-            from progress.models import CourseProgress
-            progress = CourseProgress.objects.get(child=obj)
-            return progress.display
-        except Exception:
+            return obj.course_progress.display
+        except CourseProgress.DoesNotExist:
             return 'M1 W1'
 
     def get_status(self, obj):
-        # Active if child has a session assigned
-        return 'Active' if obj.session else 'Inactive'
+        """Active if child has a current enrolment (end_date >= today or no end_date)."""
+        from datetime import date
+        if not obj.session:
+            return 'Inactive'
+        # Check if child has an active enrolment
+        today = date.today()
+        active_enrolment = obj.enrolments.filter(
+            end_date__gte=today
+        ).exists() if hasattr(obj, 'enrolments') else False
+        if active_enrolment:
+            return 'Active'
+        # If enrolments exist but all ended, child is inactive
+        has_any_enrolment = obj.enrolments.exists() if hasattr(obj, 'enrolments') else False
+        if has_any_enrolment:
+            return 'Inactive'
+        # Session assigned but no enrolment records — treat as active (legacy data)
+        return 'Active'
 
 
 class ChildCreateSerializer(serializers.ModelSerializer):
@@ -86,6 +101,7 @@ class ChildCreateSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'system_id']
 
     def validate(self, data):
+        from datetime import date
         contacts = data.get('contacts', [])
         # At least one main contact required on creation
         if self.instance is None:  # Only on create
@@ -94,6 +110,21 @@ class ChildCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'contacts': 'At least one contact must be marked as main.'}
                 )
+
+        # date_of_birth must not be in the future
+        dob = data.get('date_of_birth')
+        if dob and dob > date.today():
+            raise serializers.ValidationError(
+                {'date_of_birth': 'Date of birth cannot be in the future.'}
+            )
+
+        # start_date must be on or after date_of_birth
+        start_date = data.get('start_date')
+        if dob and start_date and start_date < dob:
+            raise serializers.ValidationError(
+                {'start_date': 'Start date cannot be before date of birth.'}
+            )
+
         return data
 
     def create(self, validated_data):

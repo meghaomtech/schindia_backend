@@ -19,8 +19,23 @@ SESSION_COLORS = [
 
 
 def get_next_color(centre_id):
-    """Get the next color in the palette based on existing session count at centre."""
-    count = Session.objects.filter(centre_id=centre_id).count()
+    """Pick the first colour from the palette not already in use at this centre."""
+    from dynamo_backend.router import use_dynamo
+
+    if use_dynamo():
+        from dynamo_backend.services import sessions_db
+        existing_sessions = sessions_db.list_sessions(str(centre_id))
+        used_colors = {(s.get('color_bg'), s.get('color_text')) for s in existing_sessions}
+    else:
+        existing_sessions = Session.objects.filter(centre_id=centre_id)
+        used_colors = set(existing_sessions.values_list('color_bg', 'color_text'))
+
+    for color in SESSION_COLORS:
+        if (color['bg'], color['text']) not in used_colors:
+            return color
+
+    # All colors used — cycle based on count
+    count = len(used_colors)
     return SESSION_COLORS[count % len(SESSION_COLORS)]
 
 
@@ -40,8 +55,10 @@ class SessionSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'color_bg', 'color_text', 'created_at']
 
     def get_enrolled_count(self, obj):
-        """Count unique children assigned to this session."""
-        return obj.children.count() if hasattr(obj, 'children') else 0
+        """Count unique children assigned to this session (uses annotation if available)."""
+        if hasattr(obj, 'enrolled_count_val'):
+            return obj.enrolled_count_val
+        return obj.children.count()
 
     def get_duration_display(self, obj):
         """Human-readable duration like '1hr 30min' or '2hr'."""

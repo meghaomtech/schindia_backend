@@ -11,8 +11,8 @@ class Session(models.Model):
     centre = models.ForeignKey(Centre, on_delete=models.CASCADE, related_name='sessions')
     name = models.CharField(max_length=50)
     child_limit = models.PositiveIntegerField(default=12)
-    age_from = models.PositiveIntegerField(default=0)  # in months
-    age_to = models.PositiveIntegerField(default=5)    # in months
+    age_from = models.PositiveIntegerField(default=0)  # interpreted per age_unit
+    age_to = models.PositiveIntegerField(default=5)    # interpreted per age_unit
     age_unit = models.CharField(max_length=10, choices=AGE_UNIT_CHOICES, default='years')
     duration_hours = models.PositiveIntegerField(default=1)
     duration_minutes = models.PositiveIntegerField(default=30)

@@ -59,6 +59,10 @@ class SessionsDynamoService:
                 pass
         return slots
 
+    def list_slots_by_room(self, room_id):
+        """List slots assigned to a specific room (uses room_id-index GSI)."""
+        return self.slots.query_by_index('room_id-index', 'room_id', str(room_id))
+
     def update_slot(self, slot_id, updates):
         return self.slots.update(str(slot_id), updates)
 

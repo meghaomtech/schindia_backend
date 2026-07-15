@@ -40,11 +40,21 @@ class Centre(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.system_id:
-            last = Centre.objects.order_by('-system_id').first()
-            if last and last.system_id.startswith('CTR-'):
+            # Support both legacy SC- and new CTR- prefixes to avoid counter reset
+            last = Centre.objects.filter(
+                system_id__startswith='CTR-'
+            ).order_by('-system_id').first()
+            if last:
                 num = int(last.system_id.split('-')[1]) + 1
             else:
-                num = 1
+                # Check for legacy SC- prefix and continue numbering from there
+                legacy_last = Centre.objects.filter(
+                    system_id__startswith='SC-'
+                ).order_by('-system_id').first()
+                if legacy_last:
+                    num = int(legacy_last.system_id.split('-')[1]) + 1
+                else:
+                    num = 1
             self.system_id = f"CTR-{num:03d}"
         # Default opening times with Sat/Sun closed per Req 7.7
         if not self.opening_times:

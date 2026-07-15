@@ -53,10 +53,43 @@ class JourneyEntryViewSet(viewsets.ModelViewSet):
         if use_dynamo() and child_pk:
             from dynamo_backend.services import progress_db
             data = request.data.copy()
-            data['date'] = data.get('date', date.today().isoformat())
+            data['date'] = data.get('date') or date.today().isoformat()
             entry = progress_db.create_journey_entry(str(child_pk), data)
+
+            # TODO: Milestone notifications (Req 25.3) not yet implemented for Dynamo path.
+            # send_milestone_notification requires ORM objects. Needs dict-compatible helper.
+
             return Response(entry, status=status.HTTP_201_CREATED)
         return super().create(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import progress_db
+            entry = progress_db.get_journey_entry(str(kwargs['pk']))
+            if not entry:
+                return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response(entry)
+        return super().retrieve(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import progress_db
+            entry = progress_db.get_journey_entry(str(kwargs['pk']))
+            if not entry:
+                return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+            updated = progress_db.update_journey_entry(str(kwargs['pk']), request.data)
+            return Response(updated)
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import progress_db
+            entry = progress_db.get_journey_entry(str(kwargs['pk']))
+            if not entry:
+                return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+            progress_db.delete_journey_entry(str(kwargs['pk']))
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return super().destroy(request, *args, **kwargs)
 
 
 class ChildNoteViewSet(viewsets.ModelViewSet):
@@ -90,10 +123,39 @@ class ChildNoteViewSet(viewsets.ModelViewSet):
         if use_dynamo() and child_pk:
             from dynamo_backend.services import progress_db
             data = request.data.copy()
-            data['date'] = data.get('date', date.today().isoformat())
+            data['date'] = data.get('date') or date.today().isoformat()
             note = progress_db.create_note(str(child_pk), data)
             return Response(note, status=status.HTTP_201_CREATED)
         return super().create(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import progress_db
+            note = progress_db.get_note(str(kwargs['pk']))
+            if not note:
+                return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response(note)
+        return super().retrieve(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import progress_db
+            note = progress_db.get_note(str(kwargs['pk']))
+            if not note:
+                return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+            updated = progress_db.update_note(str(kwargs['pk']), request.data)
+            return Response(updated)
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import progress_db
+            note = progress_db.get_note(str(kwargs['pk']))
+            if not note:
+                return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+            progress_db.delete_note(str(kwargs['pk']))
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return super().destroy(request, *args, **kwargs)
 
 
 class AttendanceViewSet(viewsets.ModelViewSet):
@@ -106,6 +168,13 @@ class AttendanceViewSet(viewsets.ModelViewSet):
 
         if child_pk:
             queryset = queryset.filter(child_id=child_pk)
+        else:
+            # Standalone route: require child query param to prevent exposing all data
+            child_id = self.request.query_params.get('child')
+            if child_id:
+                queryset = queryset.filter(child_id=child_id)
+            else:
+                return queryset.none()
 
         # Filter by date range
         date_from = self.request.query_params.get('date_from')
@@ -131,11 +200,15 @@ class AttendanceViewSet(viewsets.ModelViewSet):
 
     def list(self, request, *args, **kwargs):
         child_pk = self.kwargs.get('child_pk')
-        if use_dynamo() and child_pk:
+        if use_dynamo():
             from dynamo_backend.services import progress_db
+            # Resolve child_pk from URL or query param
+            cid = child_pk or request.query_params.get('child')
+            if not cid:
+                return Response([])
             date_from = request.query_params.get('date_from')
             date_to = request.query_params.get('date_to')
-            records = progress_db.list_attendance(str(child_pk), date_from, date_to)
+            records = progress_db.list_attendance(str(cid), date_from, date_to)
             return Response(records)
         return super().list(request, *args, **kwargs)
 
@@ -144,15 +217,63 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         if use_dynamo() and child_pk:
             from dynamo_backend.services import progress_db
             data = request.data.copy()
-            data['date'] = data.get('date', date.today().isoformat())
+            data['date'] = data.get('date') or date.today().isoformat()
+
+            # Duplicate guard: prevent same child + same date + same slot/session
+            slot_id = data.get('slot_id') or data.get('slot')
+            session_id = data.get('session_id') or data.get('session')
+            existing = progress_db.list_attendance(str(child_pk))
+            for rec in existing:
+                if rec.get('date') != data['date']:
+                    continue
+                if slot_id and rec.get('slot_id') == str(slot_id):
+                    return Response(
+                        {'detail': 'Attendance already recorded for this child on this date and slot.'},
+                        status=status.HTTP_409_CONFLICT
+                    )
+                if not slot_id and session_id and rec.get('session_id') == str(session_id):
+                    return Response(
+                        {'detail': 'Attendance already recorded for this child on this date and session.'},
+                        status=status.HTTP_409_CONFLICT
+                    )
+
             record = progress_db.create_attendance(str(child_pk), data)
 
-            # Send notification
-            from billing.notifications import send_attendance_notification
-            # For DynamoDB mode, pass the record directly
-            # (notification function handles both ORM and dict)
+            # TODO: Attendance notifications (Req 25.1) not yet implemented for Dynamo path.
+            # send_attendance_notification requires ORM objects (child.contacts, session.name).
+            # Needs a dict-compatible notification helper.
+
             return Response(record, status=status.HTTP_201_CREATED)
         return super().create(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import progress_db
+            record = progress_db.get_attendance(str(kwargs['pk']))
+            if not record:
+                return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response(record)
+        return super().retrieve(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import progress_db
+            record = progress_db.get_attendance(str(kwargs['pk']))
+            if not record:
+                return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+            updated = progress_db.update_attendance(str(kwargs['pk']), request.data)
+            return Response(updated)
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import progress_db
+            record = progress_db.get_attendance(str(kwargs['pk']))
+            if not record:
+                return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+            progress_db.delete_attendance(str(kwargs['pk']))
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return super().destroy(request, *args, **kwargs)
 
 
 class CourseProgressViewSet(viewsets.ModelViewSet):
@@ -163,7 +284,11 @@ class CourseProgressViewSet(viewsets.ModelViewSet):
         child_pk = self.kwargs.get('child_pk')
         if child_pk:
             return CourseProgress.objects.filter(child_id=child_pk)
-        return CourseProgress.objects.all()
+        # Standalone route: require child query param to prevent exposing all data
+        child_id = self.request.query_params.get('child')
+        if child_id:
+            return CourseProgress.objects.filter(child_id=child_id)
+        return CourseProgress.objects.none()
 
     def perform_create(self, serializer):
         child_pk = self.kwargs.get('child_pk')
@@ -186,9 +311,38 @@ class CourseProgressViewSet(viewsets.ModelViewSet):
         if use_dynamo() and child_pk:
             from dynamo_backend.services import progress_db
             data = request.data.copy()
+            # Check if progress already exists (upsert semantics)
+            existing = progress_db.get_course_progress(str(child_pk))
             progress = progress_db.set_course_progress(str(child_pk), data)
+            if existing:
+                return Response(progress, status=status.HTTP_200_OK)
             return Response(progress, status=status.HTTP_201_CREATED)
         return super().create(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import progress_db
+            child_pk = self.kwargs.get('child_pk')
+            if child_pk:
+                progress = progress_db.get_course_progress(str(child_pk))
+            else:
+                # Standalone: pk is the progress record ID, but we don't have a direct getter
+                # Fall through to ORM (unlikely path)
+                return super().retrieve(request, *args, **kwargs)
+            if not progress:
+                return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response(progress)
+        return super().retrieve(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if use_dynamo():
+            from dynamo_backend.services import progress_db
+            child_pk = self.kwargs.get('child_pk')
+            if child_pk:
+                progress = progress_db.set_course_progress(str(child_pk), request.data)
+                return Response(progress)
+            return super().partial_update(request, *args, **kwargs)
+        return super().partial_update(request, *args, **kwargs)
 
 
 @api_view(['GET'])
@@ -204,13 +358,15 @@ def child_activity_feed(request, child_pk):
         activities = progress_db.get_activity_feed(str(child_pk), limit=20)
 
         # Add registration event
+        reg_date = child.get('start_date') or child.get('created_at', '')[:10]
+        centre_name = child.get('centre_name', 'centre')
         activities.append({
             'type': 'registration',
-            'date': child.get('start_date', child.get('created_at', '')[:10]),
-            'text': f"Registered Joined centre",
+            'date': reg_date,
+            'text': f"Joined {centre_name}",
             'created_at': child.get('created_at', ''),
         })
-        activities.sort(key=lambda x: x.get('date', ''), reverse=True)
+        activities.sort(key=lambda x: x.get('date') or '', reverse=True)
         return Response(activities)
 
     # Django ORM path
@@ -262,7 +418,7 @@ def child_activity_feed(request, child_pk):
     activities.append({
         'type': 'registration',
         'date': child.start_date.isoformat(),
-        'text': f"Registered Joined {child.centre.name}",
+        'text': f"Joined {child.centre.name}",
         'created_at': child.created_at.isoformat(),
     })
 

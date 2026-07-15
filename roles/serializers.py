@@ -13,7 +13,7 @@ class RoleMemberSerializer(serializers.ModelSerializer):
     user_email = serializers.CharField(source='user.email', read_only=True)
     user_name = serializers.SerializerMethodField()
     role_name = serializers.CharField(source='role.name', read_only=True)
-    active_sessions = serializers.SerializerMethodField()
+    active_sessions = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = RoleMember
@@ -22,11 +22,6 @@ class RoleMemberSerializer(serializers.ModelSerializer):
 
     def get_user_name(self, obj):
         return obj.user.get_full_name()
-
-    def get_active_sessions(self, obj):
-        """Count timetable slots the person is currently assigned to as teacher."""
-        from sessions_app.models import SessionSlot
-        return SessionSlot.objects.filter(teachers=obj.user).count()
 
 
 class RoleSerializer(serializers.ModelSerializer):
@@ -43,7 +38,8 @@ class RoleSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
     def get_member_count(self, obj):
-        return obj.members.count()
+        # Use prefetched relation length to avoid extra COUNT query
+        return len(obj.members.all())
 
 
 class RoleCreateSerializer(serializers.ModelSerializer):
@@ -57,8 +53,6 @@ class RoleCreateSerializer(serializers.ModelSerializer):
     def validate_name(self, value):
         if not value or len(value.strip()) == 0:
             raise serializers.ValidationError('Role name is required.')
-        if len(value) > 50:
-            raise serializers.ValidationError('Role name must be 50 characters or less.')
         return value.strip()
 
     def validate(self, data):
@@ -95,6 +89,12 @@ class RoleCreateSerializer(serializers.ModelSerializer):
         return role
 
     def update(self, instance, validated_data):
+        """
+        Update role fields and optionally replace ALL permissions.
+        NOTE: If 'permissions' key is present in the payload, existing permissions
+        are fully replaced. Clients must send the complete permissions list.
+        For individual permission updates, use the permissions-matrix endpoint.
+        """
         permissions_data = validated_data.pop('permissions', None)
 
         for attr, value in validated_data.items():
@@ -107,8 +107,3 @@ class RoleCreateSerializer(serializers.ModelSerializer):
                 RolePermission.objects.create(role=instance, **perm_data)
 
         return instance
-
-
-class PermissionsMatrixSerializer(serializers.Serializer):
-    """Serializer for bulk updating all permissions for a role."""
-    permissions = RolePermissionSerializer(many=True)

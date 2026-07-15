@@ -27,7 +27,6 @@ ROLE_PERMISSIONS_TABLE = f"{PREFIX}-RolePermissions"
 ROLE_MEMBERS_TABLE = f"{PREFIX}-RoleMembers"
 ATTENDANCE_TABLE = f"{PREFIX}-Attendance"
 COURSE_PROGRESS_TABLE = f"{PREFIX}-CourseProgress"
-OTP_TABLE = f"{PREFIX}-OTP"
 
 ALL_TABLES = {
     'users': USERS_TABLE,
@@ -48,5 +47,4 @@ ALL_TABLES = {
     'role_members': ROLE_MEMBERS_TABLE,
     'attendance': ATTENDANCE_TABLE,
     'course_progress': COURSE_PROGRESS_TABLE,
-    'otp': OTP_TABLE,
 }

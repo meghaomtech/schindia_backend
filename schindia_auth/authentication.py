@@ -29,6 +29,9 @@ class DynamoAwareJWTAuthentication(JWTAuthentication):
         if not user.get('is_active', True):
             raise AuthenticationFailed('User is inactive.')
 
+        if user.get('status') != 'approved':
+            raise AuthenticationFailed('User account is not approved.')
+
         # Return a simple object that DRF can use as request.user
         return DynamoUser(user)
 
@@ -44,13 +47,16 @@ class DynamoUser:
         self.username = data.get('username', data['email'])
         self.first_name = data.get('first_name', '')
         self.last_name = data.get('last_name', '')
-        self.role = data.get('role', 'admin')
-        self.status = data.get('status', 'approved')
+        self.role = data.get('role', '')
+        self.status = data.get('status', '')
         self.notification_preference = data.get('notification_preference', 'all')
         self.email_verified = data.get('email_verified', False)
-        self.is_active = data.get('is_active', True)
+        self.is_active = data.get('is_active', False)
+        self.is_staff = False
+        self.is_superuser = False
         self.is_authenticated = True
         self.is_anonymous = False
+        self.requested_at = data.get('requested_at')
 
     def get_full_name(self):
         return f"{self.first_name} {self.last_name}".strip()

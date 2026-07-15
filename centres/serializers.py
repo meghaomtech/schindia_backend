@@ -147,9 +147,12 @@ class CentreCreateSerializer(serializers.ModelSerializer):
     def validate_postcode(self, value):
         if not value:
             raise serializers.ValidationError('Postcode is required.')
-        if not re.match(r'^\d{6}$', value.strip()):
-            raise serializers.ValidationError('Postcode must be a 6-digit numeric PIN code.')
-        return value.strip()
+        cleaned = value.strip()
+        # Accept Indian PIN codes (6 digits) — primary format
+        # Also accept existing UK-format postcodes for backward compatibility
+        if not (re.match(r'^\d{6}$', cleaned) or re.match(r'^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$', cleaned, re.IGNORECASE)):
+            raise serializers.ValidationError('Postcode must be a valid 6-digit PIN code.')
+        return cleaned
 
     def validate_phone(self, value):
         if not value:
@@ -171,10 +174,12 @@ class CentreCreateSerializer(serializers.ModelSerializer):
         for entry in value:
             if not isinstance(entry, dict):
                 raise serializers.ValidationError('Each closure date must be an object with date and reason.')
-            entry_date = entry.get('date')
+            # Validate each entry through ClosureDateSerializer (enforces date format + future date)
+            entry_serializer = ClosureDateSerializer(data=entry)
+            entry_serializer.is_valid(raise_exception=True)
+
+            entry_date = str(entry.get('date', ''))
             reason = entry.get('reason', '')
-            if not entry_date:
-                raise serializers.ValidationError('Each closure date must have a date.')
             if not reason:
                 raise serializers.ValidationError('Each closure date must have a reason.')
             if len(reason) > 200:

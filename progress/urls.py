@@ -1,8 +1,9 @@
 from django.urls import path, include
-from rest_framework.routers import DefaultRouter
+from rest_framework.routers import SimpleRouter
 from . import views
 
-router = DefaultRouter()
+# Standalone routes exist only for PATCH/DELETE by ID — no unfiltered list
+router = SimpleRouter()
 router.register(r'attendances', views.AttendanceViewSet, basename='attendance-standalone')
 router.register(r'course-progress', views.CourseProgressViewSet, basename='course-progress-standalone')
 

@@ -26,8 +26,27 @@ class RoleViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsApprovedUser]
 
     def get_queryset(self):
+        from django.db.models import Count, Q
+        from datetime import date
         centre_pk = self.kwargs.get('centre_pk')
-        queryset = Role.objects.prefetch_related('permissions', 'members', 'members__user')
+        queryset = Role.objects.prefetch_related(
+            'permissions',
+            'members__user',
+        ).all()
+
+        # Annotate active_sessions on members via Prefetch
+        from django.db.models import Prefetch
+        members_qs = RoleMember.objects.select_related('user').annotate(
+            active_sessions=Count(
+                'user__teaching_slots',
+                filter=Q(user__teaching_slots__start_date__lte=date.today()),
+            )
+        )
+        queryset = queryset.prefetch_related(
+            Prefetch('members', queryset=members_qs),
+            'permissions',
+        )
+
         if centre_pk:
             queryset = queryset.filter(centre_id=centre_pk)
         return queryset
@@ -50,8 +69,36 @@ class RoleViewSet(viewsets.ModelViewSet):
         if use_dynamo() and centre_pk:
             from dynamo_backend.services import roles_db
             data = request.data.copy()
-            # Remove centre field - we use the URL param
             data.pop('centre', None)
+
+            # Validate name (required, max 50 chars)
+            name = data.get('name', '').strip()
+            if not name:
+                return Response(
+                    {'name': ['Role name is required.']},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if len(name) > 50:
+                return Response(
+                    {'name': ['Role name must be 50 characters or less.']},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Check name uniqueness (case-insensitive) and max 8 roles (Req 14.4)
+            existing_roles = roles_db.list_roles(str(centre_pk))
+            if len(existing_roles) >= 8:
+                return Response(
+                    {'name': ['Maximum 8 roles can be created per centre.']},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            for r in existing_roles:
+                if r.get('name', '').lower() == name.lower():
+                    return Response(
+                        {'name': ['A role with this name already exists at this centre.']},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            data['name'] = name
             role = roles_db.create_role(str(centre_pk), data)
             return Response(role, status=status.HTTP_201_CREATED)
         return super().create(request, *args, **kwargs)
@@ -59,8 +106,36 @@ class RoleViewSet(viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         if use_dynamo():
             from dynamo_backend.services import roles_db
-            role = roles_db.update_role(str(kwargs['pk']), request.data.copy())
-            return Response(role)
+            role = roles_db.get_role(str(kwargs['pk']))
+            if not role:
+                return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+            # Scope check
+            centre_pk = self.kwargs.get('centre_pk')
+            if centre_pk and role.get('centre_id') != str(centre_pk):
+                return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+            # If renaming, check for duplicate name
+            data = request.data.copy()
+            new_name = data.get('name', '').strip()
+            if new_name:
+                if len(new_name) > 50:
+                    return Response(
+                        {'name': ['Role name must be 50 characters or less.']},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                cid = role.get('centre_id', str(centre_pk) if centre_pk else '')
+                existing_roles = roles_db.list_roles(cid)
+                for r in existing_roles:
+                    if r.get('id') != str(kwargs['pk']) and r.get('name', '').lower() == new_name.lower():
+                        return Response(
+                            {'name': ['A role with this name already exists at this centre.']},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                data['name'] = new_name
+
+            updated = roles_db.update_role(str(kwargs['pk']), data)
+            return Response(updated)
         return super().partial_update(request, *args, **kwargs)
 
     def perform_create(self, serializer):
@@ -77,6 +152,52 @@ class RoleViewSet(viewsets.ModelViewSet):
         - Role has active members (Req 15.10)
         - Role is the last one with full admin permissions (Req 15.11)
         """
+        if use_dynamo():
+            from dynamo_backend.services import roles_db
+            role = roles_db.get_role(str(kwargs['pk']))
+            if not role:
+                return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+            # Scope check
+            centre_pk = self.kwargs.get('centre_pk')
+            if centre_pk and role.get('centre_id') != str(centre_pk):
+                return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+            # Req 15.10: cannot delete if has members
+            if role.get('members'):
+                return Response(
+                    {'detail': 'Cannot delete this role because it has active members. '
+                               'Please reassign them first.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Req 15.11: cannot delete last role with admin permissions
+            admin_keys = {'people.manage', 'roles.manage'}
+            role_perms = {p.get('key') for p in role.get('permissions', []) if p.get('visible')}
+            role_has_admin = admin_keys.issubset(role_perms)
+
+            if role_has_admin:
+                cid = role.get('centre_id', str(centre_pk) if centre_pk else '')
+                all_roles = roles_db.list_roles(cid)
+                has_other_admin = False
+                for other in all_roles:
+                    if other.get('id') == str(kwargs['pk']):
+                        continue
+                    other_perms = {p.get('key') for p in other.get('permissions', []) if p.get('visible')}
+                    if admin_keys.issubset(other_perms):
+                        has_other_admin = True
+                        break
+                if not has_other_admin:
+                    return Response(
+                        {'detail': 'Cannot delete the last role with full admin permissions. '
+                                   'At least one role must retain admin access.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            roles_db.delete_role(str(kwargs['pk']))
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        # ORM path
         role = self.get_object()
 
         if role.members.exists():
@@ -134,7 +255,7 @@ def centre_people(request, centre_pk):
     Matches frontend's People tab in Roles & Permissions page (Req 14).
     """
     if use_dynamo():
-        from dynamo_backend.services import roles_db, auth_db
+        from dynamo_backend.services import roles_db
         roles = roles_db.list_roles(str(centre_pk))
 
         people = []
@@ -142,39 +263,35 @@ def centre_people(request, centre_pk):
         for role in roles:
             for member in role.get('members', []):
                 user_id = member.get('user_id')
-                if not user_id or user_id in seen_users:
+                if not user_id:
+                    continue
+
+                # Use member data directly (name/email stored on add_member)
+                # Collect all roles for multi-role users
+                if user_id in seen_users:
+                    # Find existing entry and append role
+                    for person in people:
+                        if person['id'] == user_id:
+                            if role.get('name', '') not in person['roles']:
+                                person['roles'].append(role.get('name', ''))
+                            break
                     continue
                 seen_users.add(user_id)
 
-                # Look up user details from Users table
-                user = auth_db.get_user_by_id(user_id)
-                if user:
-                    name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-                    email = user.get('email', '')
-                else:
-                    name = member.get('name', '')
-                    email = member.get('email', '')
-
-                # Count active sessions (slots where this user is a teacher)
-                from dynamo_backend.services import sessions_db
-                # We'd need to scan all slots - for now return 0
-                # TODO: add teacher lookup to sessions service
-                active_sessions = 0
-
                 people.append({
                     'id': user_id,
-                    'name': name,
-                    'email': email,
+                    'name': member.get('name', ''),
+                    'email': member.get('email', ''),
                     'role': role.get('name', ''),
+                    'roles': [role.get('name', '')],
                     'role_id': role.get('id', ''),
-                    'active_sessions': active_sessions,
+                    'active_sessions': 0,  # TODO: requires teacher lookup in sessions service
                 })
 
         # Summary counts per role
         role_counts = {}
-        for person in people:
-            role_name = person['role']
-            role_counts[role_name] = role_counts.get(role_name, 0) + 1
+        for role in roles:
+            role_counts[role.get('name', '')] = len(role.get('members', []))
 
         return Response({
             'total': len(people),
@@ -228,6 +345,47 @@ def permissions_matrix(request, centre_pk):
     Return the full permissions matrix for a centre (Req 16).
     Roles as columns, permissions as rows grouped by module.
     """
+    # Define all permission keys grouped by module
+    permission_modules = {
+        'Centres': ['centres.view', 'centres.edit'],
+        'Sessions': ['sessions.view', 'sessions.edit'],
+        'Timetable': ['timetable.view', 'timetable.edit'],
+        'Children': ['children.view', 'children.edit'],
+        'Invoices': ['invoices.view', 'invoices.edit'],
+        'People & Roles': ['people.view', 'people.manage', 'roles.view', 'roles.manage'],
+    }
+
+    if use_dynamo():
+        from dynamo_backend.services import roles_db, centres_db
+        centre = centres_db.get_centre(str(centre_pk))
+        if not centre:
+            return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        roles = roles_db.list_roles(str(centre_pk))
+
+        matrix = {}
+        for module_name, keys in permission_modules.items():
+            matrix[module_name] = []
+            for key in keys:
+                row = {'key': key, 'roles': {}}
+                for role in roles:
+                    perm = next((p for p in role.get('permissions', []) if p.get('key') == key), None)
+                    row['roles'][role['id']] = {
+                        'visible': perm.get('visible', False) if perm else False,
+                        'edit': perm.get('edit', False) if perm else False,
+                    }
+                matrix[module_name].append(row)
+
+        roles_data = [{
+            'id': r['id'],
+            'name': r.get('name', ''),
+            'data_scope': r.get('data_scope', 'own'),
+            'member_count': len(r.get('members', [])),
+        } for r in roles]
+
+        return Response({'roles': roles_data, 'matrix': matrix})
+
+    # ORM path
     try:
         centre = Centre.objects.get(pk=centre_pk)
     except Centre.DoesNotExist:
@@ -286,17 +444,11 @@ def save_permissions_matrix(request, centre_pk):
     Expected body: { "role_id": { "key": {"visible": bool, "edit": bool}, ... }, ... }
     Enforces Req 16.7: at least one role must retain people.manage + roles.manage.
     """
-    try:
-        centre = Centre.objects.get(pk=centre_pk)
-    except Centre.DoesNotExist:
-        return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
-
     data = request.data  # { role_id: { key: {visible, edit} } }
 
     # Validate: at least one role must keep people.manage + roles.manage
     admin_keys = {'people.manage', 'roles.manage'}
     any_role_has_admin = False
-
     for role_id, perms in data.items():
         has_people_manage = perms.get('people.manage', {}).get('visible', False)
         has_roles_manage = perms.get('roles.manage', {}).get('visible', False)
@@ -309,6 +461,32 @@ def save_permissions_matrix(request, centre_pk):
             {'detail': 'At least one role must retain people.manage and roles.manage permissions.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+    if use_dynamo():
+        from dynamo_backend.services import roles_db, centres_db
+        centre = centres_db.get_centre(str(centre_pk))
+        if not centre:
+            return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        skipped = []
+        for role_id, perms in data.items():
+            role = roles_db.get_role(str(role_id))
+            if not role or role.get('centre_id') != str(centre_pk):
+                skipped.append(role_id)
+                continue
+            for key, flags in perms.items():
+                roles_db.update_permission(str(role_id), key, flags)
+
+        resp = {'detail': 'Permissions saved successfully.'}
+        if skipped:
+            resp['skipped_role_ids'] = skipped
+        return Response(resp)
+
+    # ORM path
+    try:
+        centre = Centre.objects.get(pk=centre_pk)
+    except Centre.DoesNotExist:
+        return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
 
     # Apply changes
     for role_id, perms in data.items():
@@ -389,12 +567,33 @@ def add_member(request, role_pk):
                 name = name or f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
                 email = email or user.get('email', '')
 
+        # Check per-centre uniqueness (Req 14.8) — user can't be in multiple roles at same centre
+        centre_id = role.get('centre_id', '')
+        if centre_id:
+            all_roles = roles_db.list_roles(centre_id)
+            for r in all_roles:
+                for m in r.get('members', []):
+                    if m.get('user_id') == str(user_id):
+                        return Response(
+                            {'detail': 'This person already exists at this centre.'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
         result = roles_db.add_member(str(role_pk), str(user_id), name=name, email=email)
         if result is None:
             return Response(
                 {'detail': 'This person already exists in this role.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        # Send onboarding email (Req 22)
+        _send_onboarding_email_dynamo(
+            email=email,
+            name=name,
+            centre_name=role.get('centre_name', ''),
+            role_name=role.get('name', ''),
+        )
+
         return Response(result, status=status.HTTP_201_CREATED)
 
     try:
@@ -432,6 +631,32 @@ def add_member(request, role_pk):
 @permission_classes([IsAuthenticated, IsApprovedUser])
 def resend_invite(request, role_pk, user_pk):
     """Resend onboarding email (Req 22.5)."""
+    if use_dynamo():
+        from dynamo_backend.services import roles_db
+        role = roles_db.get_role(str(role_pk))
+        if not role:
+            return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        member = next(
+            (m for m in role.get('members', []) if m.get('user_id') == str(user_pk)),
+            None
+        )
+        if not member:
+            return Response({'detail': 'Member not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        success = _send_onboarding_email_dynamo(
+            email=member.get('email', ''),
+            name=member.get('name', ''),
+            centre_name=role.get('centre_name', ''),
+            role_name=role.get('name', ''),
+        )
+        if success:
+            return Response({'detail': 'Onboarding email sent successfully.'})
+        return Response(
+            {'detail': 'Failed to send onboarding email.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
     try:
         member = RoleMember.objects.get(role_id=role_pk, user_id=user_pk)
     except RoleMember.DoesNotExist:
@@ -452,6 +677,31 @@ def remove_member(request, role_pk, user_pk):
     """Remove a user from a role (Req 14.10-11)."""
     if use_dynamo():
         from dynamo_backend.services import roles_db
+        role = roles_db.get_role(str(role_pk))
+        if not role:
+            return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if this is the last member with admin permissions (Req 14.10-11)
+        admin_keys = {'people.manage', 'roles.manage'}
+        role_perms = {p.get('key') for p in role.get('permissions', []) if p.get('visible')}
+        if admin_keys.issubset(role_perms):
+            # This is an admin role — check if removing this member leaves 0 admins at this centre
+            centre_id = role.get('centre_id', '')
+            all_roles = roles_db.list_roles(centre_id) if centre_id else []
+            admin_members = set()
+            for r in all_roles:
+                r_perms = {p.get('key') for p in r.get('permissions', []) if p.get('visible')}
+                if admin_keys.issubset(r_perms):
+                    for m in r.get('members', []):
+                        admin_members.add(m.get('user_id'))
+            # If removing this user leaves no admins
+            admin_members.discard(str(user_pk))
+            if not admin_members:
+                return Response(
+                    {'detail': 'Cannot remove the last person with admin permissions.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         result = roles_db.remove_member(str(role_pk), str(user_pk))
         if not result:
             return Response({'detail': 'Member not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -477,6 +727,11 @@ def _send_onboarding_email(member):
     user = member.user
     centre = member.role.centre
     role_name = member.role.name
+    frontend_url = getattr(settings, 'FRONTEND_URL', None) or (
+        settings.CORS_ALLOWED_ORIGINS[0]
+        if hasattr(settings, 'CORS_ALLOWED_ORIGINS') and settings.CORS_ALLOWED_ORIGINS
+        else 'https://portal.shichida.in'
+    )
 
     subject = f"Welcome to {centre.name} — Shichida India Portal"
     message = (
@@ -485,7 +740,7 @@ def _send_onboarding_email(member):
         f"You can log in to the Shichida India Admin Portal using your "
         f"registered email address. An OTP will be sent to your email for "
         f"secure authentication.\n\n"
-        f"Login here: {settings.CORS_ALLOWED_ORIGINS[0] if hasattr(settings, 'CORS_ALLOWED_ORIGINS') and settings.CORS_ALLOWED_ORIGINS else 'https://portal.shichida.in'}/login\n\n"
+        f"Login here: {frontend_url}/login\n\n"
         f"If you have any questions, please contact the centre manager.\n\n"
         f"Best regards,\n"
         f"Shichida India Admin Portal"
@@ -495,11 +750,49 @@ def _send_onboarding_email(member):
         send_mail(
             subject=subject,
             message=message,
-            from_email=None,  # uses DEFAULT_FROM_EMAIL
+            from_email=None,
             recipient_list=[user.email],
             fail_silently=False,
         )
         return True
     except Exception as e:
         logger.warning(f"Failed to send onboarding email to {user.email}: {e}")
+        return False
+
+
+def _send_onboarding_email_dynamo(email, name, centre_name, role_name):
+    """Send onboarding email for Dynamo path (Req 22)."""
+    if not email:
+        return False
+
+    frontend_url = getattr(settings, 'FRONTEND_URL', None) or (
+        settings.CORS_ALLOWED_ORIGINS[0]
+        if hasattr(settings, 'CORS_ALLOWED_ORIGINS') and settings.CORS_ALLOWED_ORIGINS
+        else 'https://portal.shichida.in'
+    )
+
+    subject = f"Welcome to {centre_name} — Shichida India Portal" if centre_name else "Welcome — Shichida India Portal"
+    message = (
+        f"Hi {name or 'there'},\n\n"
+        f"You have been added to {centre_name or 'a centre'} as a {role_name or 'team member'}.\n\n"
+        f"You can log in to the Shichida India Admin Portal using your "
+        f"registered email address. An OTP will be sent to your email for "
+        f"secure authentication.\n\n"
+        f"Login here: {frontend_url}/login\n\n"
+        f"If you have any questions, please contact the centre manager.\n\n"
+        f"Best regards,\n"
+        f"Shichida India Admin Portal"
+    )
+
+    try:
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=None,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to send onboarding email to {email}: {e}")
         return False

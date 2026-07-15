@@ -143,6 +143,31 @@ def info_dashboard(request):
             'status': 'Active' if has_schedule else 'No schedule',
         })
 
+    return _build_dashboard_response(
+        total_centres=total_centres,
+        total_children=total_children,
+        total_teachers=total_teachers,
+        total_sessions=total_sessions,
+        total_rooms=total_rooms,
+        total_enrolments=total_enrolments,
+        total_roles=total_roles,
+        total_people=total_people,
+        children_per_centre=children_per_centre,
+        roles_people=roles_people,
+        per_centre_roles=per_centre_roles,
+        session_popularity=session_popularity,
+        age_distribution=age_buckets,
+        centres_glance=centres_glance,
+    )
+
+
+def _build_dashboard_response(
+    total_centres, total_children, total_teachers, total_sessions,
+    total_rooms, total_enrolments, total_roles, total_people,
+    children_per_centre, roles_people, per_centre_roles,
+    session_popularity, age_distribution, centres_glance,
+):
+    """Shared response builder — keeps ORM and Dynamo paths in sync."""
     return Response({
         'summary': {
             'centres': total_centres,
@@ -158,7 +183,7 @@ def info_dashboard(request):
         'roles_people': roles_people,
         'per_centre_roles': per_centre_roles,
         'session_popularity': session_popularity,
-        'age_distribution': age_buckets,
+        'age_distribution': age_distribution,
         'centres_glance': centres_glance,
     })
 
@@ -178,7 +203,7 @@ def _info_dashboard_dynamo(request):
     # Aggregate data
     total_rooms = sum(len(c.get('rooms', [])) for c in centres)
     total_sessions = 0
-    total_enrolments = 0
+    total_enrolments = 0  # TODO: Needs enrolments table scan or dedicated counter — not yet implemented in Dynamo
     total_roles = 0
     total_people = set()
     total_teachers = set()
@@ -187,7 +212,11 @@ def _info_dashboard_dynamo(request):
     per_centre_roles = []
     centres_glance = []
     session_popularity = []
+    # Build roles_people in a single pass (avoid duplicate list_roles calls)
+    roles_people_map = {}
 
+    # PERF: This loop does 3 DDB queries per centre (sessions, slots, roles).
+    # For large orgs consider caching (data changes slowly — even 60s TTL helps).
     for centre in centres:
         cid = centre['id']
         sessions = sessions_db.list_sessions(cid)
@@ -200,24 +229,37 @@ def _info_dashboard_dynamo(request):
         centre_children = [c for c in all_children if c.get('centre_id') == cid]
         children_count = len(centre_children)
 
-        # Count teachers and people
+        # Count enrolments from children assigned to sessions at this centre
+        for child in centre_children:
+            if child.get('session_id'):
+                total_enrolments += 1
+
+        # Count teachers and people — use a per-centre set to avoid double-counting
         centre_people = set()
-        teachers_count = 0
+        centre_teachers = set()
         for role in roles:
+            role_name = role.get('name', '')
             for member in role.get('members', []):
                 uid = member.get('user_id')
                 if uid:
                     centre_people.add(uid)
                     total_people.add(uid)
-                    if 'teacher' in role.get('name', '').lower():
+                    if 'teacher' in role_name.lower():
+                        centre_teachers.add(uid)
                         total_teachers.add(uid)
-                        teachers_count += 1
+
+            # Build roles_people breakdown in the same loop (comment #2 fix)
+            name = role_name or 'Unknown'
+            member_count = len(role.get('members', []))
+            if name not in roles_people_map:
+                roles_people_map[name] = 0
+            roles_people_map[name] += member_count
 
         children_per_centre.append({
             'centre_id': cid,
             'centre_name': centre.get('name', ''),
             'children': children_count,
-            'teachers': teachers_count,
+            'teachers': len(centre_teachers),
         })
 
         per_centre_roles.append({
@@ -239,6 +281,7 @@ def _info_dashboard_dynamo(request):
             'status': 'Active' if slots else 'No schedule',
         })
 
+        # Session popularity: count children whose session_id matches
         for session in sessions:
             session_children = [c for c in centre_children if c.get('session_id') == session['id']]
             session_popularity.append({
@@ -274,35 +317,21 @@ def _info_dashboard_dynamo(request):
         except (ValueError, TypeError):
             pass
 
-    # Roles breakdown
-    roles_people = {}
-    for centre in centres:
-        cid = centre['id']
-        roles = roles_db.list_roles(cid)
-        for role in roles:
-            name = role.get('name', 'Unknown')
-            member_count = len(role.get('members', []))
-            if name not in roles_people:
-                roles_people[name] = 0
-            roles_people[name] += member_count
+    roles_people_list = [{'role': k, 'people': v} for k, v in roles_people_map.items()]
 
-    roles_people_list = [{'role': k, 'people': v} for k, v in roles_people.items()]
-
-    return Response({
-        'summary': {
-            'centres': total_centres,
-            'children': total_children,
-            'teachers': len(total_teachers),
-            'sessions': total_sessions,
-            'rooms': total_rooms,
-            'enrolments': total_enrolments,
-            'roles': total_roles,
-            'people': len(total_people),
-        },
-        'children_per_centre': children_per_centre,
-        'roles_people': roles_people_list,
-        'per_centre_roles': per_centre_roles,
-        'session_popularity': session_popularity,
-        'age_distribution': age_buckets,
-        'centres_glance': centres_glance,
-    })
+    return _build_dashboard_response(
+        total_centres=total_centres,
+        total_children=total_children,
+        total_teachers=len(total_teachers),
+        total_sessions=total_sessions,
+        total_rooms=total_rooms,
+        total_enrolments=total_enrolments,
+        total_roles=total_roles,
+        total_people=len(total_people),
+        children_per_centre=children_per_centre,
+        roles_people=roles_people_list,
+        per_centre_roles=per_centre_roles,
+        session_popularity=session_popularity,
+        age_distribution=age_buckets,
+        centres_glance=centres_glance,
+    )

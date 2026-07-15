@@ -219,8 +219,8 @@ REST_FRAMEWORK = {
 # =============================================================================
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=24),  # Req 26.1: 24-hour session
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),   # Req 26.5: 7 days for remember me
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),   # Short-lived; session length is the refresh token's job
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),      # Req 26.5: 7 days for remember me / Req 26.1: 24h session via refresh
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
@@ -236,6 +236,9 @@ CORS_ALLOWED_ORIGINS = config(
     cast=Csv()
 )
 CORS_ALLOW_CREDENTIALS = True
+
+# Frontend URL for email links (login, onboarding, etc.)
+FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
 
 # =============================================================================
 # SECURITY (Production only)

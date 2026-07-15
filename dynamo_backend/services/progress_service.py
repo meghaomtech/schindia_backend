@@ -1,7 +1,7 @@
 """DynamoDB service for Journey, Notes, Attendance, and CourseProgress operations."""
 
 import uuid
-from datetime import datetime, timedelta, date
+from datetime import timedelta, date
 from ..service import DynamoDBService
 from ..tables import JOURNEY_TABLE, NOTES_TABLE, ATTENDANCE_TABLE, COURSE_PROGRESS_TABLE
 
@@ -15,12 +15,14 @@ class ProgressDynamoService:
 
     # Journey CRUD
     def list_journey(self, child_id):
-        return self.journey.query_by_index('child_id-index', 'child_id', str(child_id))
+        entries = self.journey.query_by_index('child_id-index', 'child_id', str(child_id))
+        return sorted(entries, key=lambda x: x.get('date', ''), reverse=True)
 
     def create_journey_entry(self, child_id, data):
-        data['id'] = str(uuid.uuid4())
-        data['child_id'] = str(child_id)
-        return self.journey.create(data)
+        item = dict(data)
+        item['id'] = str(uuid.uuid4())
+        item['child_id'] = str(child_id)
+        return self.journey.create(item)
 
     def get_journey_entry(self, entry_id):
         return self.journey.get(str(entry_id))
@@ -33,12 +35,14 @@ class ProgressDynamoService:
 
     # Notes CRUD
     def list_notes(self, child_id):
-        return self.notes.query_by_index('child_id-index', 'child_id', str(child_id))
+        notes = self.notes.query_by_index('child_id-index', 'child_id', str(child_id))
+        return sorted(notes, key=lambda x: x.get('date', ''), reverse=True)
 
     def create_note(self, child_id, data):
-        data['id'] = str(uuid.uuid4())
-        data['child_id'] = str(child_id)
-        return self.notes.create(data)
+        item = dict(data)
+        item['id'] = str(uuid.uuid4())
+        item['child_id'] = str(child_id)
+        return self.notes.create(item)
 
     def get_note(self, note_id):
         return self.notes.get(str(note_id))
@@ -59,9 +63,19 @@ class ProgressDynamoService:
         return sorted(records, key=lambda x: x.get('date', ''), reverse=True)
 
     def create_attendance(self, child_id, data):
-        data['id'] = str(uuid.uuid4())
-        data['child_id'] = str(child_id)
-        return self.attendance.create(data)
+        """Create attendance with duplicate guard (child + slot + date)."""
+        item = dict(data)  # Don't mutate caller's dict
+        item['id'] = str(uuid.uuid4())
+        item['child_id'] = str(child_id)
+        return self.attendance.create(item)
+
+    def has_duplicate_attendance(self, child_id, slot_id, att_date):
+        """Check if attendance already exists for child + slot + date."""
+        records = self.list_attendance(str(child_id))
+        for r in records:
+            if r.get('slot_id') == str(slot_id) and r.get('date') == str(att_date):
+                return True
+        return False
 
     def get_attendance(self, attendance_id):
         return self.attendance.get(str(attendance_id))
@@ -72,32 +86,27 @@ class ProgressDynamoService:
     def delete_attendance(self, attendance_id):
         return self.attendance.delete(str(attendance_id))
 
-    def count_attendance(self, child_id, status='attended', date_from=None, date_to=None):
-        """Count attendance records for a child."""
-        records = self.list_attendance(child_id, date_from, date_to)
-        return len([r for r in records if r.get('status') == status])
-
-    # Course Progress CRUD
+    # Course Progress CRUD (child_id is the partition key — 1:1 relationship)
     def get_course_progress(self, child_id):
-        results = self.course_progress.query_by_index('child_id-index', 'child_id', str(child_id))
-        return results[0] if results else None
+        return self.course_progress.get(str(child_id))
 
     def set_course_progress(self, child_id, data):
+        """Upsert course progress — child_id is the PK, no race condition."""
+        item = dict(data)
+        item['child_id'] = str(child_id)
+        item.pop('id', None)
         existing = self.get_course_progress(child_id)
         if existing:
-            return self.course_progress.update(existing['id'], data)
-        data['id'] = str(uuid.uuid4())
-        data['child_id'] = str(child_id)
-        return self.course_progress.create(data)
+            return self.course_progress.update(str(child_id), item)
+        return self.course_progress.create(item)
 
     # Activity feed (combined)
     def get_activity_feed(self, child_id, limit=20):
         """Build activity timeline from attendance, journey, and notes."""
         activities = []
 
-        # Attendance
-        attendances = self.list_attendance(child_id)[:limit]
-        for att in attendances:
+        # Attendance (already sorted by date desc from list_attendance)
+        for att in self.list_attendance(child_id):
             activities.append({
                 'type': 'attendance',
                 'date': att.get('date', ''),
@@ -106,9 +115,8 @@ class ProgressDynamoService:
                 'created_at': att.get('created_at', ''),
             })
 
-        # Journey entries
-        journey = self.list_journey(child_id)[:limit]
-        for entry in journey:
+        # Journey entries (already sorted by date desc)
+        for entry in self.list_journey(child_id):
             activities.append({
                 'type': entry.get('type', 'observation').lower(),
                 'date': entry.get('date', ''),
@@ -117,9 +125,8 @@ class ProgressDynamoService:
                 'created_at': entry.get('created_at', ''),
             })
 
-        # Notes
-        notes = self.list_notes(child_id)[:limit]
-        for note in notes:
+        # Notes (already sorted by date desc)
+        for note in self.list_notes(child_id):
             activities.append({
                 'type': 'note',
                 'date': note.get('date', ''),
@@ -128,26 +135,37 @@ class ProgressDynamoService:
                 'created_at': note.get('created_at', ''),
             })
 
-        # Sort by date descending
-        activities.sort(key=lambda x: x.get('date', ''), reverse=True)
+        # Sort by (date, created_at) descending for stable ordering
+        activities.sort(
+            key=lambda x: (x.get('date') or '', x.get('created_at') or ''),
+            reverse=True
+        )
         return activities[:limit]
 
     def get_child_stats(self, child_id):
-        """Get stats for a child: sessions_this_week, total, journey, progress."""
+        """Get stats for a child — single fetch, derive counts in memory."""
         today = date.today()
         week_start = today - timedelta(days=today.weekday())
         week_end = week_start + timedelta(days=6)
+        week_start_iso = week_start.isoformat()
+        week_end_iso = week_end.isoformat()
 
-        sessions_this_week = self.count_attendance(
-            child_id, 'attended',
-            date_from=week_start.isoformat(),
-            date_to=week_end.isoformat()
-        )
-        total_sessions = self.count_attendance(child_id, 'attended')
+        # Single fetch for all attendance
+        all_records = self.list_attendance(child_id)
+        attended = [r for r in all_records if r.get('status') == 'attended']
+        total_sessions = len(attended)
+        sessions_this_week = len([
+            r for r in attended
+            if week_start_iso <= (r.get('date') or '') <= week_end_iso
+        ])
+
         journey_entries = len(self.list_journey(child_id))
 
         progress = self.get_course_progress(child_id)
-        course_progress = f"M{progress.get('current_month', 1)} W{progress.get('current_week', 1)}" if progress else 'M1 W1'
+        course_progress = (
+            f"M{progress.get('current_month', 1)} W{progress.get('current_week', 1)}"
+            if progress else 'M1 W1'
+        )
 
         return {
             'sessions_this_week': sessions_this_week,

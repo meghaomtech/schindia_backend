@@ -15,9 +15,9 @@ urlpatterns = [
     path('logout/', views.logout_view, name='logout'),
     # User info
     path('me/', views.me, name='me'),
-    # OTP endpoints (alternate naming for backward compat)
-    path('otp/request/', views.otp_request, name='otp-request'),
-    path('otp/verify/', views.otp_verify, name='otp-verify'),
+    # Forgot / Reset password
+    path('forgot-password/', views.forgot_password, name='forgot-password'),
+    path('reset-password/', views.reset_password, name='reset-password'),
     # Notification preferences (Req 25.4)
     path('notification-preferences/', views.notification_preferences, name='notification-preferences'),
     # Access request management (root/admin only)

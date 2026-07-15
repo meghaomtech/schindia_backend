@@ -1,5 +1,5 @@
 import uuid
-import random
+import secrets
 from datetime import timedelta
 
 from django.contrib.auth.models import AbstractUser
@@ -12,7 +12,7 @@ class OTPToken(models.Model):
     """OTP token for passwordless login (Req 21)."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(db_index=True)
-    code = models.CharField(max_length=6)
+    code_hash = models.CharField(max_length=128)  # hashed OTP — never store plaintext
     attempts = models.PositiveIntegerField(default=0)
     is_used = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -28,17 +28,37 @@ class OTPToken(models.Model):
     @classmethod
     def generate(cls, email):
         """Generate a new 6-digit OTP for the given email."""
+        import hashlib
+
         # Invalidate previous unused OTPs for this email
         cls.objects.filter(email=email, is_used=False).update(is_used=True)
 
-        code = f"{random.randint(0, 999999):06d}"
+        # Purge expired rows older than 1 hour to prevent table bloat
+        cutoff = timezone.now() - timedelta(hours=1)
+        cls.objects.filter(email=email, expires_at__lt=cutoff).delete()
+
+        code = f"{secrets.randbelow(1000000):06d}"
+        code_hash = hashlib.sha256(code.encode()).hexdigest()
         expires_at = timezone.now() + timedelta(minutes=5)
 
-        return cls.objects.create(
+        otp = cls.objects.create(
             email=email,
-            code=code,
+            code_hash=code_hash,
             expires_at=expires_at,
         )
+        # Attach plaintext code for sending (not persisted)
+        otp._plaintext_code = code
+        return otp
+
+    @property
+    def code(self):
+        """Return plaintext code if available (only right after generate)."""
+        return getattr(self, '_plaintext_code', None)
+
+    def verify_code(self, code):
+        """Verify a plaintext code against the stored hash."""
+        import hashlib
+        return self.code_hash == hashlib.sha256(code.encode()).hexdigest()
 
     @property
     def is_expired(self):
@@ -49,6 +69,15 @@ class OTPToken(models.Model):
         if self.locked_until and timezone.now() < self.locked_until:
             return True
         return False
+
+    @classmethod
+    def is_email_locked(cls, email):
+        """Check lockout at the email level, not per-row."""
+        locked_otp = cls.objects.filter(
+            email=email,
+            locked_until__gt=timezone.now(),
+        ).first()
+        return locked_otp is not None
 
 
 class RootAccessRequest(models.Model):
