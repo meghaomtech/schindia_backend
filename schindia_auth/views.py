@@ -443,13 +443,18 @@ def otp_request(request):
 
     # Generate OTP
     otp = OTPToken.generate(email)
+    plaintext_code = otp.code  # Grab plaintext before any potential refresh
+
+    if not plaintext_code:
+        logger.error(f"OTP generation failed — no plaintext code available for {email}")
+        return Response(generic_response)
 
     # Send OTP email
     try:
         send_mail(
             subject='Your Shichida India Portal Login Code',
             message=(
-                f"Your one-time login code is: {otp.code}\n\n"
+                f"Your one-time login code is: {plaintext_code}\n\n"
                 f"This code expires in 5 minutes.\n\n"
                 f"If you did not request this code, please ignore this email."
             ),
@@ -625,13 +630,14 @@ def forgot_password(request):
 
     # Generate OTP
     otp = OTPToken.generate(email)
+    plaintext_code = otp.code
 
     # Send reset email
     try:
         send_mail(
             subject='Password Reset — Shichida India Portal',
             message=(
-                f"Your password reset code is: {otp.code}\n\n"
+                f"Your password reset code is: {plaintext_code}\n\n"
                 f"This code expires in 5 minutes.\n\n"
                 f"If you did not request a password reset, please ignore this email."
             ),
