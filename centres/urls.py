@@ -14,7 +14,7 @@ urlpatterns = [
     ),
     path(
         'centres/<uuid:centre_pk>/rooms/<uuid:pk>/',
-        views.RoomViewSet.as_view({'patch': 'partial_update', 'delete': 'destroy'}),
+        views.RoomViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}),
         name='centre-rooms-detail'
     ),
 ]

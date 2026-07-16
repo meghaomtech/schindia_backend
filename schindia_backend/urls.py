@@ -1,10 +1,8 @@
-from django.contrib import admin
 from django.urls import path, include
 from billing import legacy_views
 from .dashboard import info_dashboard
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
     path('api/auth/', include('schindia_auth.urls')),
     path('api/v1/', include('centres.urls')),
     path('api/v1/', include('sessions_app.urls')),

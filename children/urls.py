@@ -28,7 +28,7 @@ urlpatterns = [
     ),
     path(
         'children/<uuid:child_pk>/contacts/<uuid:pk>/',
-        views.ContactViewSet.as_view({'patch': 'partial_update', 'delete': 'destroy'}),
+        views.ContactViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}),
         name='child-contacts-detail'
     ),
     # Nested enrolment endpoints under child

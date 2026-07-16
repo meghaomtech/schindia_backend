@@ -28,6 +28,22 @@ class AuthDynamoService:
         }
         return self.db.create(user)
 
+    def create_user_with_hashed_password(self, email, password_hash, first_name, last_name, role='admin', status='pending'):
+        """Create a user whose password is already hashed (e.g. from an approved access request)."""
+        user = {
+            'id': str(uuid.uuid4()),
+            'email': email,
+            'username': email,
+            'first_name': first_name,
+            'last_name': last_name,
+            'password': password_hash,
+            'role': role,
+            'status': status,
+            'is_active': True,
+            'requested_at': datetime.utcnow().isoformat(),
+        }
+        return self.db.create(user)
+
     def get_user_by_id(self, user_id):
         """Get user by UUID."""
         return self.db.get(str(user_id))

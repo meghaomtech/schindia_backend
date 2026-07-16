@@ -73,6 +73,10 @@ class CentresDynamoService:
         """Get all rooms for a centre."""
         return self.rooms.query_by_index('centre_id-index', 'centre_id', str(centre_id))
 
+    def get_room(self, room_id):
+        """Get a single room by id."""
+        return self.rooms.get(str(room_id))
+
     def create_room(self, centre_id, data):
         """Create a room in a centre."""
         data['id'] = str(uuid.uuid4())

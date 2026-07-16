@@ -2,14 +2,11 @@ import re
 from datetime import date
 
 from rest_framework import serializers
-from .models import Centre, Room
 
 
-class RoomSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Room
-        fields = ['id', 'name']
-        read_only_fields = ['id']
+class RoomSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    name = serializers.CharField(max_length=50)
 
     def validate_name(self, value):
         if not value or len(value.strip()) == 0:
@@ -17,34 +14,6 @@ class RoomSerializer(serializers.ModelSerializer):
         if len(value) > 50:
             raise serializers.ValidationError('Room name must be 50 characters or less.')
         return value.strip()
-
-
-class CentreListSerializer(serializers.ModelSerializer):
-    rooms = RoomSerializer(many=True, read_only=True)
-    rooms_count = serializers.SerializerMethodField()
-    closure_days_count = serializers.SerializerMethodField()
-    initials = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Centre
-        fields = [
-            'id', 'system_id', 'name', 'street_address', 'city', 'postcode',
-            'vat_number', 'phone', 'email', 'manager_name', 'max_capacity',
-            'rooms', 'rooms_count', 'closure_dates', 'closure_days_count',
-            'opening_times', 'bank_details', 'initials', 'created_at',
-        ]
-        read_only_fields = ['id', 'system_id', 'created_at']
-
-    def get_rooms_count(self, obj):
-        return obj.rooms.count()
-
-    def get_closure_days_count(self, obj):
-        return len(obj.closure_dates) if obj.closure_dates else 0
-
-    def get_initials(self, obj):
-        """First letter of each word in centre name, max 2 characters."""
-        words = obj.name.split()
-        return ''.join(w[0].upper() for w in words[:2])
 
 
 class ClosureDateSerializer(serializers.Serializer):
@@ -111,17 +80,22 @@ class OpeningTimesSerializer(serializers.Serializer):
         return data
 
 
-class CentreCreateSerializer(serializers.ModelSerializer):
+class CentreCreateSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    system_id = serializers.CharField(read_only=True)
+    name = serializers.CharField(max_length=100)
+    street_address = serializers.CharField(max_length=200)
+    city = serializers.CharField(max_length=50)
+    postcode = serializers.CharField(max_length=10)
+    vat_number = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    phone = serializers.CharField(max_length=15)
+    email = serializers.EmailField()
+    manager_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    max_capacity = serializers.IntegerField(required=False, default=100)
     rooms = RoomSerializer(many=True, required=False)
-
-    class Meta:
-        model = Centre
-        fields = [
-            'id', 'system_id', 'name', 'street_address', 'city', 'postcode',
-            'vat_number', 'phone', 'email', 'manager_name', 'max_capacity',
-            'rooms', 'closure_dates', 'opening_times', 'bank_details',
-        ]
-        read_only_fields = ['id', 'system_id']
+    closure_dates = serializers.JSONField(required=False, default=list)
+    opening_times = serializers.JSONField(required=False, default=dict)
+    bank_details = serializers.JSONField(required=False, allow_null=True)
 
     def validate_name(self, value):
         if not value or len(value.strip()) == 0:
@@ -219,79 +193,3 @@ class CentreCreateSerializer(serializers.ModelSerializer):
         serializer = BankDetailsSerializer(data=value)
         serializer.is_valid(raise_exception=True)
         return value
-
-    def create(self, validated_data):
-        rooms_data = validated_data.pop('rooms', [])
-        centre = Centre.objects.create(**validated_data)
-        for room_data in rooms_data:
-            Room.objects.create(centre=centre, **room_data)
-
-        # Create default "Admin" role with all permissions (Req 15.4)
-        self._create_default_admin_role(centre)
-
-        return centre
-
-    def _create_default_admin_role(self, centre):
-        """Create initial 'Admin' role with all permissions enabled."""
-        from roles.models import Role, RolePermission, RoleMember
-
-        admin_role = Role.objects.create(
-            centre=centre,
-            name='Admin',
-            description='Full administrative access'
-        )
-
-        # Define all permission keys grouped by module
-        permission_keys = [
-            'centres.view', 'centres.edit',
-            'sessions.view', 'sessions.edit',
-            'timetable.view', 'timetable.edit',
-            'children.view', 'children.edit',
-            'invoices.view', 'invoices.edit',
-            'people.view', 'people.manage',
-            'roles.view', 'roles.manage',
-        ]
-
-        for key in permission_keys:
-            RolePermission.objects.create(
-                role=admin_role,
-                key=key,
-                edit=True,
-                visible=True,
-            )
-
-        # Assign the request user to admin role if available
-        request = self.context.get('request')
-        if request and request.user and request.user.is_authenticated:
-            RoleMember.objects.create(role=admin_role, user=request.user)
-
-        return admin_role
-
-    def update(self, instance, validated_data):
-        rooms_data = validated_data.pop('rooms', None)
-
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-
-        # If rooms are provided in update, sync them
-        if rooms_data is not None:
-            existing_ids = set(instance.rooms.values_list('id', flat=True))
-            incoming_ids = set()
-
-            for room_data in rooms_data:
-                room_id = room_data.get('id')
-                if room_id and room_id in existing_ids:
-                    room = Room.objects.get(id=room_id)
-                    room.name = room_data.get('name', room.name)
-                    room.save()
-                    incoming_ids.add(room_id)
-                else:
-                    new_room = Room.objects.create(centre=instance, **room_data)
-                    incoming_ids.add(new_room.id)
-
-            # Delete rooms not in the incoming list
-            to_delete = existing_ids - incoming_ids
-            Room.objects.filter(id__in=to_delete).delete()
-
-        return instance

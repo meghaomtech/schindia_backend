@@ -27,6 +27,9 @@ ROLE_PERMISSIONS_TABLE = f"{PREFIX}-RolePermissions"
 ROLE_MEMBERS_TABLE = f"{PREFIX}-RoleMembers"
 ATTENDANCE_TABLE = f"{PREFIX}-Attendance"
 COURSE_PROGRESS_TABLE = f"{PREFIX}-CourseProgress"
+OTP_TOKENS_TABLE = f"{PREFIX}-OtpTokens"
+ROOT_ACCESS_REQUESTS_TABLE = f"{PREFIX}-RootAccessRequests"
+JWT_BLACKLIST_TABLE = f"{PREFIX}-JwtBlacklist"
 
 ALL_TABLES = {
     'users': USERS_TABLE,
@@ -47,4 +50,7 @@ ALL_TABLES = {
     'role_members': ROLE_MEMBERS_TABLE,
     'attendance': ATTENDANCE_TABLE,
     'course_progress': COURSE_PROGRESS_TABLE,
+    'otp_tokens': OTP_TOKENS_TABLE,
+    'root_access_requests': ROOT_ACCESS_REQUESTS_TABLE,
+    'jwt_blacklist': JWT_BLACKLIST_TABLE,
 }

@@ -17,6 +17,7 @@ from .tables import (
     INVOICES_TABLE, INVOICE_ITEMS_TABLE, PURCHASES_TABLE,
     ROLES_TABLE, ROLE_PERMISSIONS_TABLE, ROLE_MEMBERS_TABLE,
     ATTENDANCE_TABLE, COURSE_PROGRESS_TABLE,
+    OTP_TOKENS_TABLE, ROOT_ACCESS_REQUESTS_TABLE, JWT_BLACKLIST_TABLE,
 )
 
 
@@ -325,7 +326,55 @@ TABLE_DEFINITIONS = [
         ],
         # No GSI needed — 1:1 relationship, direct get/put by child_id
     },
+    # Phase: SQLite removal — auth tables
+    {
+        'TableName': OTP_TOKENS_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+            {'AttributeName': 'email', 'AttributeType': 'S'},
+        ],
+        'GlobalSecondaryIndexes': [
+            {
+                'IndexName': 'email-index',
+                'KeySchema': [{'AttributeName': 'email', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            }
+        ],
+    },
+    {
+        'TableName': ROOT_ACCESS_REQUESTS_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+            {'AttributeName': 'email', 'AttributeType': 'S'},
+        ],
+        'GlobalSecondaryIndexes': [
+            {
+                'IndexName': 'email-index',
+                'KeySchema': [{'AttributeName': 'email', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            }
+        ],
+    },
+    {
+        'TableName': JWT_BLACKLIST_TABLE,
+        'KeySchema': [{'AttributeName': 'jti', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'jti', 'AttributeType': 'S'},
+        ],
+        # TTL attribute 'expires_at' enabled separately below via update_time_to_live
+    },
 ]
+
+
+def enable_ttl():
+    """Enable DynamoDB TTL on the JWT blacklist table so expired entries self-purge."""
+    client = get_dynamodb_resource().meta.client
+    client.update_time_to_live(
+        TableName=JWT_BLACKLIST_TABLE,
+        TimeToLiveSpecification={'Enabled': True, 'AttributeName': 'expires_at'},
+    )
 
 
 def create_all_tables():
@@ -360,6 +409,11 @@ def create_all_tables():
 
         dynamodb.create_table(**params)
         print(f"  ✓ {table_name} (created)")
+
+        if table_name == JWT_BLACKLIST_TABLE:
+            dynamodb.meta.client.get_waiter('table_exists').wait(TableName=table_name)
+            enable_ttl()
+            print(f"    ↳ TTL enabled on {table_name}")
 
     print("\nAll tables provisioned successfully!")
 

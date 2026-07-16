@@ -6,9 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
-from dynamo_backend.router import use_dynamo
-from centres.models import Centre, Room
-from .models import Session, SessionSlot
+from dynamo_backend.services import sessions_db, centres_db
 from .serializers import SessionSerializer, SessionSlotSerializer, GenerateSlotsSerializer
 
 
@@ -20,287 +18,209 @@ def time_to_minutes(t):
     return t.hour * 60 + t.minute
 
 
-def has_overlap(centre_id, room_id, date, start_minutes, duration_minutes, exclude_slot_id=None):
-    """Check if a proposed slot conflicts with existing ones in the same room."""
-    existing = SessionSlot.objects.filter(
-        centre_id=centre_id,
-        room_id=room_id,
-        start_date=date,
-    ).select_related('session')
-
-    if exclude_slot_id:
-        existing = existing.exclude(id=exclude_slot_id)
-
-    proposed_end = start_minutes + duration_minutes
-
-    for slot in existing:
-        slot_start = time_to_minutes(slot.start_time)
-        slot_duration = slot.session.duration_total_minutes
-        slot_end = slot_start + slot_duration
-
-        if start_minutes < slot_end and proposed_end > slot_start:
-            return True
-
-    return False
-
-
-class SessionViewSet(viewsets.ModelViewSet):
-    serializer_class = SessionSerializer
+class SessionViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated, IsApprovedUser]
-
-    def get_queryset(self):
-        from django.db.models import Count
-        centre_pk = self.kwargs.get('centre_pk')
-        queryset = Session.objects.annotate(enrolled_count_val=Count('children'))
-        if centre_pk:
-            return queryset.filter(centre_id=centre_pk)
-        return queryset
+    serializer_class = SessionSerializer
 
     def list(self, request, *args, **kwargs):
         centre_pk = self.kwargs.get('centre_pk')
-        if use_dynamo():
-            from dynamo_backend.services import sessions_db
-            if centre_pk:
-                sessions = sessions_db.list_sessions(str(centre_pk))
-            else:
-                # Standalone: check query param
-                centre_id = request.query_params.get('centre')
-                if centre_id:
-                    sessions = sessions_db.list_sessions(str(centre_id))
-                else:
-                    sessions = []
-            return Response(sessions)
-        return super().list(request, *args, **kwargs)
+        if centre_pk:
+            sessions = sessions_db.list_sessions(str(centre_pk))
+        else:
+            # Standalone: check query param
+            centre_id = request.query_params.get('centre')
+            sessions = sessions_db.list_sessions(str(centre_id)) if centre_id else []
+        return Response(sessions)
+
+    def retrieve(self, request, *args, **kwargs):
+        session = sessions_db.get_session(str(kwargs['pk']))
+        if not session:
+            return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(session)
 
     def create(self, request, *args, **kwargs):
         centre_pk = self.kwargs.get('centre_pk')
-        if use_dynamo() and centre_pk:
-            from dynamo_backend.services import sessions_db
-            from .serializers import get_next_color, SESSION_COLORS
+        if not centre_pk:
+            return Response({'detail': 'A centre is required to create a session.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            data = request.data.copy()
+        from .serializers import get_next_color
 
-            # Validate using the serializer (Req 8.8 — name uniqueness, duration, age, child_limit)
-            # We need to check name uniqueness against Dynamo
-            name = data.get('name', '')
-            if name:
-                existing_sessions = sessions_db.list_sessions(str(centre_pk))
-                for s in existing_sessions:
-                    if s.get('name', '').lower() == name.lower():
-                        return Response(
-                            {'name': ['A session with this name already exists at this centre.']},
-                            status=status.HTTP_400_BAD_REQUEST
-                        )
+        data = request.data.copy()
 
-            # Validate duration
-            hours = int(data.get('duration_hours', 1))
-            minutes = int(data.get('duration_minutes', 30))
-            total_minutes = hours * 60 + minutes
-            if total_minutes < 30:
-                return Response(
-                    {'duration_minutes': ['Total duration must be at least 30 minutes.']},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            if total_minutes > 480:
-                return Response(
-                    {'duration_minutes': ['Total duration must be 480 minutes (8 hours) or less.']},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Validate child_limit
-            child_limit = int(data.get('child_limit', 12))
-            if child_limit < 1 or child_limit > 50:
-                return Response(
-                    {'child_limit': ['Child limit must be between 1 and 50.']},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Validate age range
-            age_from = int(data.get('age_from', 0))
-            age_to = int(data.get('age_to', 5))
-            if age_from >= age_to:
-                return Response(
-                    {'age_from': ['age_from must be less than age_to.']},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Remove centre FK field that would fail SQLite validation
-            data.pop('centre', None)
-            # Auto-assign color (Req 8.9 — first unused colour)
-            color = get_next_color(centre_pk)
-            data['color_bg'] = color['bg']
-            data['color_text'] = color['text']
-            session = sessions_db.create_session(str(centre_pk), data)
-            return Response(session, status=status.HTTP_201_CREATED)
-        return super().create(request, *args, **kwargs)
-
-    def partial_update(self, request, *args, **kwargs):
-        if use_dynamo():
-            from dynamo_backend.services import sessions_db
-            session = sessions_db.get_session(str(kwargs['pk']))
-            if not session:
-                return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-            # Scope check: ensure session belongs to the centre in the URL
-            centre_pk = self.kwargs.get('centre_pk')
-            if centre_pk and session.get('centre_id') != str(centre_pk):
-                return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-            updated = sessions_db.update_session(str(kwargs['pk']), request.data)
-            return Response(updated)
-        return super().partial_update(request, *args, **kwargs)
-
-    def destroy(self, request, *args, **kwargs):
-        if use_dynamo():
-            from dynamo_backend.services import sessions_db
-            session = sessions_db.get_session(str(kwargs['pk']))
-            if not session:
-                return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-            # Scope check
-            centre_pk = self.kwargs.get('centre_pk')
-            if centre_pk and session.get('centre_id') != str(centre_pk):
-                return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-            # Check for dependent slots (same guard as Room deletion — Req 5.7)
-            centre_id = session.get('centre_id', str(centre_pk) if centre_pk else '')
-            if centre_id:
-                slots = sessions_db.list_slots(centre_id)
-                dependent_slots = [s for s in slots if s.get('session_id') == str(kwargs['pk'])]
-                if dependent_slots:
+        # Validate using the serializer (Req 8.8 — name uniqueness, duration, age, child_limit)
+        # We need to check name uniqueness against Dynamo
+        name = data.get('name', '')
+        if name:
+            existing_sessions = sessions_db.list_sessions(str(centre_pk))
+            for s in existing_sessions:
+                if s.get('name', '').lower() == name.lower():
                     return Response(
-                        {'detail': 'Cannot delete session with existing timetable slots. Remove slots first.'},
+                        {'name': ['A session with this name already exists at this centre.']},
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
-            sessions_db.delete_session(str(kwargs['pk']))
-            return Response(status=status.HTTP_204_NO_CONTENT)
-        return super().destroy(request, *args, **kwargs)
+        # Validate duration
+        hours = int(data.get('duration_hours', 1))
+        minutes = int(data.get('duration_minutes', 30))
+        total_minutes = hours * 60 + minutes
+        if total_minutes < 30:
+            return Response(
+                {'duration_minutes': ['Total duration must be at least 30 minutes.']},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if total_minutes > 480:
+            return Response(
+                {'duration_minutes': ['Total duration must be 480 minutes (8 hours) or less.']},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-    def perform_create(self, serializer):
+        # Validate child_limit
+        child_limit = int(data.get('child_limit', 12))
+        if child_limit < 1 or child_limit > 50:
+            return Response(
+                {'child_limit': ['Child limit must be between 1 and 50.']},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate age range
+        age_from = int(data.get('age_from', 0))
+        age_to = int(data.get('age_to', 5))
+        if age_from >= age_to:
+            return Response(
+                {'age_from': ['age_from must be less than age_to.']},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        data.pop('centre', None)
+        # Auto-assign color (Req 8.9 — first unused colour)
+        color = get_next_color(centre_pk)
+        data['color_bg'] = color['bg']
+        data['color_text'] = color['text']
+        session = sessions_db.create_session(str(centre_pk), data)
+        return Response(session, status=status.HTTP_201_CREATED)
+
+    def partial_update(self, request, *args, **kwargs):
+        session = sessions_db.get_session(str(kwargs['pk']))
+        if not session:
+            return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Scope check: ensure session belongs to the centre in the URL
         centre_pk = self.kwargs.get('centre_pk')
-        if centre_pk:
-            centre = Centre.objects.get(pk=centre_pk)
-            serializer.save(centre=centre)
-        else:
-            serializer.save()
+        if centre_pk and session.get('centre_id') != str(centre_pk):
+            return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        updated = sessions_db.update_session(str(kwargs['pk']), request.data)
+        return Response(updated)
+
+    def destroy(self, request, *args, **kwargs):
+        session = sessions_db.get_session(str(kwargs['pk']))
+        if not session:
+            return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Scope check
+        centre_pk = self.kwargs.get('centre_pk')
+        if centre_pk and session.get('centre_id') != str(centre_pk):
+            return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check for dependent slots (same guard as Room deletion — Req 5.7)
+        centre_id = session.get('centre_id', str(centre_pk) if centre_pk else '')
+        if centre_id:
+            slots = sessions_db.list_slots(centre_id)
+            dependent_slots = [s for s in slots if s.get('session_id') == str(kwargs['pk'])]
+            if dependent_slots:
+                return Response(
+                    {'detail': 'Cannot delete session with existing timetable slots. Remove slots first.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        sessions_db.delete_session(str(kwargs['pk']))
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class SessionSlotViewSet(viewsets.ModelViewSet):
-    serializer_class = SessionSlotSerializer
+class SessionSlotViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated, IsApprovedUser]
-
-    def get_queryset(self):
-        centre_pk = self.kwargs.get('centre_pk')
-        queryset = SessionSlot.objects.select_related('session', 'room', 'centre')
-
-        if centre_pk:
-            queryset = queryset.filter(centre_id=centre_pk)
-
-        week = self.request.query_params.get('week')
-        if week:
-            from datetime import datetime as dt
-            try:
-                week_start = dt.strptime(week, '%Y-%m-%d').date()
-                week_end = week_start + timedelta(days=6)
-                queryset = queryset.filter(start_date__gte=week_start, start_date__lte=week_end)
-            except ValueError:
-                pass
-
-        return queryset
+    serializer_class = SessionSlotSerializer
 
     def list(self, request, *args, **kwargs):
         centre_pk = self.kwargs.get('centre_pk')
-        if use_dynamo():
-            from dynamo_backend.services import sessions_db
-            if centre_pk:
+        if centre_pk:
+            week = request.query_params.get('week')
+            slots = sessions_db.list_slots(str(centre_pk), week)
+        else:
+            centre_id = request.query_params.get('centre')
+            if centre_id:
                 week = request.query_params.get('week')
-                slots = sessions_db.list_slots(str(centre_pk), week)
+                slots = sessions_db.list_slots(str(centre_id), week)
             else:
-                centre_id = request.query_params.get('centre')
-                if centre_id:
-                    week = request.query_params.get('week')
-                    slots = sessions_db.list_slots(str(centre_id), week)
-                else:
-                    slots = []
-            return Response(slots)
-        return super().list(request, *args, **kwargs)
+                slots = []
+        return Response(slots)
+
+    def retrieve(self, request, *args, **kwargs):
+        slot = sessions_db.get_slot(str(kwargs['pk']))
+        if not slot:
+            return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(slot)
 
     def create(self, request, *args, **kwargs):
         centre_pk = self.kwargs.get('centre_pk')
-        if use_dynamo() and centre_pk:
-            from dynamo_backend.services import sessions_db
-            data = request.data.copy()
+        if not centre_pk:
+            return Response({'detail': 'A centre is required to create a slot.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Validate session exists
-            session_id = data.get('session_id') or data.get('session')
-            if session_id:
-                session = sessions_db.get_session(str(session_id))
-                if not session:
-                    return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
+        data = request.data.copy()
 
-                # Conflict detection: check room/time overlap
-                room_id = data.get('room_id') or data.get('room')
-                start_time = data.get('start_time', '09:00')
-                start_date = data.get('start_date')
-                if room_id and start_time and start_date:
-                    time_parts = start_time.split(':')
-                    start_minutes = int(time_parts[0]) * 60 + int(time_parts[1])
-                    duration = session.get('duration_hours', 1) * 60 + session.get('duration_minutes', 30)
-                    from datetime import datetime as dt
-                    try:
-                        slot_date = dt.strptime(start_date, '%Y-%m-%d').date()
-                        if sessions_db._has_overlap(str(centre_pk), str(room_id), slot_date, start_minutes, duration):
-                            return Response(
-                                {'detail': 'Time conflict detected for this room and time.'},
-                                status=status.HTTP_409_CONFLICT
-                            )
-                    except (ValueError, TypeError):
-                        pass
+        # Validate session exists
+        session_id = data.get('session_id') or data.get('session')
+        if session_id:
+            session = sessions_db.get_session(str(session_id))
+            if not session:
+                return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-            slot = sessions_db.create_slot(str(centre_pk), data)
-            return Response(slot, status=status.HTTP_201_CREATED)
-        return super().create(request, *args, **kwargs)
+            # Conflict detection: check room/time overlap
+            room_id = data.get('room_id') or data.get('room')
+            start_time = data.get('start_time', '09:00')
+            start_date = data.get('start_date')
+            if room_id and start_time and start_date:
+                time_parts = start_time.split(':')
+                start_minutes = int(time_parts[0]) * 60 + int(time_parts[1])
+                duration = session.get('duration_hours', 1) * 60 + session.get('duration_minutes', 30)
+                try:
+                    slot_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+                    if sessions_db._has_overlap(str(centre_pk), str(room_id), slot_date, start_minutes, duration):
+                        return Response(
+                            {'detail': 'Time conflict detected for this room and time.'},
+                            status=status.HTTP_409_CONFLICT
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+        slot = sessions_db.create_slot(str(centre_pk), data)
+        return Response(slot, status=status.HTTP_201_CREATED)
 
     def partial_update(self, request, *args, **kwargs):
-        if use_dynamo():
-            from dynamo_backend.services import sessions_db
-            slot = sessions_db.get_slot(str(kwargs['pk']))
-            if not slot:
-                return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
+        slot = sessions_db.get_slot(str(kwargs['pk']))
+        if not slot:
+            return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-            # Scope check
-            centre_pk = self.kwargs.get('centre_pk')
-            if centre_pk and slot.get('centre_id') != str(centre_pk):
-                return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
+        # Scope check
+        centre_pk = self.kwargs.get('centre_pk')
+        if centre_pk and slot.get('centre_id') != str(centre_pk):
+            return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-            updated = sessions_db.update_slot(str(kwargs['pk']), request.data)
-            return Response(updated)
-        return super().partial_update(request, *args, **kwargs)
+        updated = sessions_db.update_slot(str(kwargs['pk']), request.data)
+        return Response(updated)
 
     def destroy(self, request, *args, **kwargs):
-        if use_dynamo():
-            from dynamo_backend.services import sessions_db
-            slot = sessions_db.get_slot(str(kwargs['pk']))
-            if not slot:
-                return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
+        slot = sessions_db.get_slot(str(kwargs['pk']))
+        if not slot:
+            return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-            # Scope check
-            centre_pk = self.kwargs.get('centre_pk')
-            if centre_pk and slot.get('centre_id') != str(centre_pk):
-                return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-            sessions_db.delete_slot(str(kwargs['pk']))
-            return Response(status=status.HTTP_204_NO_CONTENT)
-        return super().destroy(request, *args, **kwargs)
-
-    def perform_create(self, serializer):
+        # Scope check
         centre_pk = self.kwargs.get('centre_pk')
-        if centre_pk:
-            centre = Centre.objects.get(pk=centre_pk)
-            serializer.save(centre=centre)
-        else:
-            serializer.save()
+        if centre_pk and slot.get('centre_id') != str(centre_pk):
+            return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        sessions_db.delete_slot(str(kwargs['pk']))
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @api_view(['POST'])
@@ -311,85 +231,34 @@ def generate_slots(request, centre_pk):
     serializer.is_valid(raise_exception=True)
     data = serializer.validated_data
 
-    try:
-        centre = Centre.objects.get(pk=centre_pk)
-    except Centre.DoesNotExist:
+    centre = centres_db.get_centre(str(centre_pk))
+    if not centre:
         return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-    try:
-        session = Session.objects.get(pk=data['session_id'], centre=centre)
-    except Session.DoesNotExist:
-        return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
+    session_data = {
+        'session_id': str(data['session_id']),
+        'room_id': str(data['room_id']),
+        'start_time': data['start_time'].strftime('%H:%M'),
+        'booking_type': data['booking_type'],
+        'start_date': data['start_date'].isoformat(),
+        'starting_month': data['starting_month'],
+        'starting_week': data['starting_week'],
+        'teacher_ids': [str(t) for t in data.get('teacher_ids', [])],
+        'child_ids': [str(c) for c in data.get('child_ids', [])],
+        'notes': data.get('notes', ''),
+    }
 
-    try:
-        room = Room.objects.get(pk=data['room_id'], centre=centre)
-    except Room.DoesNotExist:
-        return Response({'detail': 'Room not found.'}, status=status.HTTP_404_NOT_FOUND)
+    created_slots, error = sessions_db.generate_slots(str(centre_pk), session_data)
 
-    start_date = data['start_date']
-    start_time = data['start_time']
-    start_minutes = time_to_minutes(start_time)
-    duration_minutes = session.duration_total_minutes
-
-    if data['booking_type'] == 'one-off':
-        num_slots = 1
-    else:
-        num_slots = 15
-
-    # Check for overlaps first
-    conflicts = []
-    slot_dates = []
-    for i in range(num_slots):
-        slot_date = start_date + timedelta(weeks=i)
-        slot_dates.append(slot_date)
-        if has_overlap(centre.id, room.id, slot_date, start_minutes, duration_minutes):
-            conflicts.append(str(slot_date))
-
-    if conflicts:
+    if created_slots is None:
+        if error == 'Session not found.':
+            return Response({'detail': error}, status=status.HTTP_404_NOT_FOUND)
         return Response(
-            {
-                'detail': 'Time conflicts detected.',
-                'conflicts': conflicts,
-            },
+            {'detail': 'Time conflicts detected.', 'conflicts': error},
             status=status.HTTP_409_CONFLICT
         )
 
-    # Create slots
-    created_slots = []
-    starting_month = data['starting_month']
-    starting_week = data['starting_week']
-
-    for i, slot_date in enumerate(slot_dates):
-        day = DAY_MAP[slot_date.weekday()]
-
-        slot = SessionSlot.objects.create(
-            centre=centre,
-            room=room,
-            session=session,
-            day=day,
-            start_time=start_time,
-            booking_type=data['booking_type'],
-            start_date=slot_date,
-            starting_month=starting_month,
-            starting_week=starting_week,
-            notes=data.get('notes', ''),
-        )
-
-        if data.get('teacher_ids'):
-            slot.teachers.set(data['teacher_ids'])
-        if data.get('child_ids'):
-            slot.children.set(data['child_ids'])
-
-        created_slots.append(slot)
-
-        # Advance week/month counters
-        starting_week += 1
-        if starting_week > 4:
-            starting_week = 1
-            starting_month += 1
-
-    result_serializer = SessionSlotSerializer(created_slots, many=True)
-    return Response(result_serializer.data, status=status.HTTP_201_CREATED)
+    return Response(created_slots, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
@@ -401,11 +270,10 @@ def timetable(request, centre_pk):
       - week: ISO date string (YYYY-MM-DD) for the Monday of the week. Defaults to current week.
       - filter_type: 'all' | 'room' | 'session' (Req 10.5)
       - filter_id: UUID of the room or session to filter by
-    
-    Returns slots grouped by day with room info, session info, 
+
+    Returns slots grouped by day with room info, session info,
     enrolled children count, and course progress.
     """
-    # Determine week range first (shared logic)
     week_param = request.query_params.get('week')
     if week_param:
         try:
@@ -421,154 +289,14 @@ def timetable(request, centre_pk):
 
     week_end = week_start + timedelta(days=6)
 
-    if use_dynamo():
-        return _timetable_dynamo(request, str(centre_pk), week_start, week_end)
-
-    # Django ORM path
-    try:
-        centre = Centre.objects.get(pk=centre_pk)
-    except Centre.DoesNotExist:
-        return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-    # Get slots for this centre in this week range
-    slots = SessionSlot.objects.filter(
-        centre=centre,
-        start_date__gte=week_start,
-        start_date__lte=week_end,
-    ).select_related('session', 'room').prefetch_related('children')
-
-    # Apply filters (Req 10.5)
-    filter_type = request.query_params.get('filter_type', 'all')
-    filter_id = request.query_params.get('filter_id')
-    if filter_type == 'room' and filter_id:
-        slots = slots.filter(room_id=filter_id)
-    elif filter_type == 'session' and filter_id:
-        slots = slots.filter(session_id=filter_id)
-
-    # Also get recurring slots that fall within this week
-    # Recurring slots have a start_date on or before this week's end
-    # and would repeat weekly
-    recurring_slots = SessionSlot.objects.filter(
-        centre=centre,
-        booking_type='recurring',
-        start_date__lte=week_end,
-    ).select_related('session', 'room').prefetch_related('children')
-
-    # Apply same filters to recurring slots (Req 10.5)
-    if filter_type == 'room' and filter_id:
-        recurring_slots = recurring_slots.filter(room_id=filter_id)
-    elif filter_type == 'session' and filter_id:
-        recurring_slots = recurring_slots.filter(session_id=filter_id)
-
-    # Build timetable data
-    days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
-    timetable_data = {day: [] for day in days}
-
-    # Track already-added slot IDs to avoid duplicates
-    added_slot_ids = set()
-
-    # Add direct week slots
-    for slot in slots:
-        day = DAY_MAP[slot.start_date.weekday()]
-        children_count = slot.children.count()
-        end_time_minutes = time_to_minutes(slot.start_time) + slot.session.duration_total_minutes
-        end_hours = end_time_minutes // 60
-        end_mins = end_time_minutes % 60
-
-        timetable_data[day].append({
-            'id': str(slot.id),
-            'session_name': slot.session.name,
-            'room_name': slot.room.name,
-            'start_time': slot.start_time.strftime('%H:%M'),
-            'end_time': f"{end_hours:02d}:{end_mins:02d}",
-            'children_enrolled': children_count,
-            'child_limit': slot.session.child_limit,
-            'starting_month': slot.starting_month,
-            'starting_week': slot.starting_week,
-            'booking_type': slot.booking_type,
-            'date': slot.start_date.isoformat(),
-            'color_bg': slot.session.color_bg,
-            'color_text': slot.session.color_text,
-        })
-        added_slot_ids.add(slot.id)
-
-    # Add recurring slots that repeat into this week
-    for slot in recurring_slots:
-        if slot.id in added_slot_ids:
-            continue
-
-        # Check if this recurring slot's day matches a day in the requested week
-        slot_day = slot.day
-        if slot_day not in days:
-            continue
-
-        # Calculate if this slot would occur in this week
-        day_index = days.index(slot_day)
-        target_date = week_start + timedelta(days=day_index)
-
-        # Only include if the recurring slot started on or before this date
-        if slot.start_date > target_date:
-            continue
-
-        # Respect end_date — don't project recurring slots past their end
-        if slot.end_date and slot.end_date < target_date:
-            continue
-
-        # Check week difference is valid (slot repeats weekly)
-        days_diff = (target_date - slot.start_date).days
-        if days_diff < 0 or days_diff % 7 != 0:
-            continue
-
-        children_count = slot.children.count()
-        end_time_minutes = time_to_minutes(slot.start_time) + slot.session.duration_total_minutes
-        end_hours = end_time_minutes // 60
-        end_mins = end_time_minutes % 60
-
-        # Calculate which month/week this occurrence is
-        weeks_elapsed = days_diff // 7
-        occ_month = slot.starting_month + (slot.starting_week - 1 + weeks_elapsed) // 4
-        occ_week = ((slot.starting_week - 1 + weeks_elapsed) % 4) + 1
-
-        timetable_data[slot_day].append({
-            'id': str(slot.id),
-            'session_name': slot.session.name,
-            'room_name': slot.room.name,
-            'start_time': slot.start_time.strftime('%H:%M'),
-            'end_time': f"{end_hours:02d}:{end_mins:02d}",
-            'children_enrolled': children_count,
-            'child_limit': slot.session.child_limit,
-            'starting_month': occ_month,
-            'starting_week': occ_week,
-            'booking_type': slot.booking_type,
-            'date': target_date.isoformat(),
-            'color_bg': slot.session.color_bg,
-            'color_text': slot.session.color_text,
-        })
-
-    # Sort each day's slots by start_time
-    for day in days:
-        timetable_data[day].sort(key=lambda x: x['start_time'])
-
-    # Get centre opening times and closure info
-    closure_dates = centre.closure_dates or []
-    opening_times = centre.opening_times or {}
-
-    return Response({
-        'centre_id': str(centre.id),
-        'centre_name': centre.name,
-        'week_start': week_start.isoformat(),
-        'week_end': week_end.isoformat(),
-        'opening_times': opening_times,
-        'closure_dates': closure_dates,
-        'timetable': timetable_data,
-    })
+    return _timetable_dynamo(request, str(centre_pk), week_start, week_end)
 
 
 def _timetable_dynamo(request, centre_id, week_start, week_end):
-    """DynamoDB-based timetable view for production."""
-    from dynamo_backend.services import centres_db, sessions_db
+    """DynamoDB-based timetable view."""
+    from dynamo_backend.services import centres_db as _centres_db
 
-    centre = centres_db.get_centre(centre_id)
+    centre = _centres_db.get_centre(centre_id)
     if not centre:
         return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -582,7 +310,16 @@ def _timetable_dynamo(request, centre_id, week_start, week_end):
     days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
     timetable_data = {day: [] for day in days}
 
+    # Apply filters (Req 10.5)
+    filter_type = request.query_params.get('filter_type', 'all')
+    filter_id = request.query_params.get('filter_id')
+
     for slot in all_slots:
+        if filter_type == 'room' and filter_id and slot.get('room_id') != filter_id:
+            continue
+        if filter_type == 'session' and filter_id and slot.get('session_id') != filter_id:
+            continue
+
         slot_date_str = slot.get('start_date', '')
         if not slot_date_str:
             continue

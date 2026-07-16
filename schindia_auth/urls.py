@@ -24,4 +24,8 @@ urlpatterns = [
     path('access-requests/', views.access_requests_list, name='access-requests'),
     path('access-requests/<uuid:pk>/approve/', views.approve_request, name='approve-request'),
     path('access-requests/<uuid:pk>/reject/', views.reject_request, name='reject-request'),
+    # Root access request management (root only) — replaces the Django Admin approval workflow
+    path('root-access-requests/', views.root_access_requests_list, name='root-access-requests'),
+    path('root-access-requests/<uuid:pk>/approve/', views.approve_root_access_request, name='approve-root-access-request'),
+    path('root-access-requests/<uuid:pk>/reject/', views.reject_root_access_request, name='reject-root-access-request'),
 ]
