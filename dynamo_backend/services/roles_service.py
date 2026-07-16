@@ -94,8 +94,8 @@ class RolesDynamoService:
     def list_members(self, role_id):
         return self.members.query_by_index('role_id-index', 'role_id', str(role_id))
 
-    def add_member(self, role_id, user_id):
-        """Add a user to a role."""
+    def add_member(self, role_id, user_id, name='', email=''):
+        """Add a user to a role. Stores name and email for display."""
         # Check if already a member
         existing = self.list_members(role_id)
         if any(m.get('user_id') == str(user_id) for m in existing):
@@ -105,13 +105,18 @@ class RolesDynamoService:
             'id': str(uuid.uuid4()),
             'role_id': str(role_id),
             'user_id': str(user_id),
+            'name': name,
+            'email': email,
         }
         return self.members.create(data)
 
     def remove_member(self, role_id, user_id):
-        """Remove a user from a role."""
+        """Remove a user from a role. user_id can be either the user_id or the member record id."""
         members = self.list_members(role_id)
+        # Try matching by user_id first, then by member record id
         member = next((m for m in members if m.get('user_id') == str(user_id)), None)
+        if not member:
+            member = next((m for m in members if m.get('id') == str(user_id)), None)
         if member:
             return self.members.delete(member['id'])
         return False

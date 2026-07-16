@@ -1,7 +1,5 @@
 from django.core.management.base import BaseCommand
-from django.contrib.auth import get_user_model
-
-User = get_user_model()
+from dynamo_backend.services import auth_db
 
 
 class Command(BaseCommand):
@@ -13,7 +11,7 @@ class Command(BaseCommand):
         parser.add_argument('--password', required=True, help='Password')
 
     def handle(self, *args, **options):
-        if User.objects.filter(role='root').exists():
+        if auth_db.root_exists():
             self.stderr.write(self.style.ERROR('Root admin already exists.'))
             return
 
@@ -22,8 +20,7 @@ class Command(BaseCommand):
         first_name = parts[0]
         last_name = parts[1] if len(parts) > 1 else ''
 
-        User.objects.create_superuser(
-            username=options['email'],
+        auth_db.create_user(
             email=options['email'],
             password=options['password'],
             first_name=first_name,

@@ -74,6 +74,9 @@ class ChildrenDynamoService:
     def list_contacts(self, child_id):
         return self.contacts.query_by_index('child_id-index', 'child_id', str(child_id))
 
+    def get_contact(self, contact_id):
+        return self.contacts.get(str(contact_id))
+
     def create_contact(self, child_id, data):
         data['id'] = str(uuid.uuid4())
         data['child_id'] = str(child_id)
@@ -89,9 +92,53 @@ class ChildrenDynamoService:
     def list_enrolments(self, child_id):
         return self.enrolments.query_by_index('child_id-index', 'child_id', str(child_id))
 
+    def get_enrolment(self, enrolment_id):
+        return self.enrolments.get(str(enrolment_id))
+
     def create_enrolment(self, data):
-        data['id'] = str(uuid.uuid4())
-        return self.enrolments.create(data)
+        item = dict(data)
+        item['id'] = str(uuid.uuid4())
+        enrolment = self.enrolments.create(item)
+
+        # Sync slot's child_ids to maintain timetable capacity counts
+        slot_id = item.get('slot_id') or item.get('slot')
+        child_id = item.get('child_id') or item.get('child')
+        if slot_id and child_id:
+            self._add_child_to_slot(str(slot_id), str(child_id))
+
+        return enrolment
+
+    def update_enrolment(self, enrolment_id, updates):
+        return self.enrolments.update(str(enrolment_id), updates)
 
     def delete_enrolment(self, enrolment_id):
+        # Remove child from slot's child_ids before deleting
+        enrolment = self.get_enrolment(enrolment_id)
+        if enrolment:
+            slot_id = enrolment.get('slot_id') or enrolment.get('slot')
+            child_id = enrolment.get('child_id') or enrolment.get('child')
+            if slot_id and child_id:
+                self._remove_child_from_slot(str(slot_id), str(child_id))
         return self.enrolments.delete(str(enrolment_id))
+
+    def _add_child_to_slot(self, slot_id, child_id):
+        """Add child_id to the slot's child_ids list in sessions table."""
+        from .sessions_service import SessionsDynamoService
+        sessions_svc = SessionsDynamoService()
+        slot = sessions_svc.get_slot(slot_id)
+        if slot:
+            child_ids = slot.get('child_ids', [])
+            if child_id not in child_ids:
+                child_ids.append(child_id)
+                sessions_svc.update_slot(slot_id, {'child_ids': child_ids})
+
+    def _remove_child_from_slot(self, slot_id, child_id):
+        """Remove child_id from the slot's child_ids list."""
+        from .sessions_service import SessionsDynamoService
+        sessions_svc = SessionsDynamoService()
+        slot = sessions_svc.get_slot(slot_id)
+        if slot:
+            child_ids = slot.get('child_ids', [])
+            if child_id in child_ids:
+                child_ids.remove(child_id)
+                sessions_svc.update_slot(slot_id, {'child_ids': child_ids})

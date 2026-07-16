@@ -30,16 +30,16 @@ ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv(
 # =============================================================================
 
 INSTALLED_APPS = [
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
     'django.contrib.staticfiles',
+    # contenttypes + auth are required transitively by rest_framework_simplejwt's
+    # own models.py (TokenUser references auth.Group/auth.Permission at import
+    # time) — they're never queried since we don't use Django's ORM User, and
+    # DATABASES is a dummy backend, so no SQLite table for them ever gets created.
+    'django.contrib.contenttypes',
+    'django.contrib.auth',
     # Third-party
     'rest_framework',
     'rest_framework_simplejwt',
-    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
     'storages',
@@ -57,11 +57,8 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
@@ -76,8 +73,6 @@ TEMPLATES = [
             'context_processors': [
                 'django.template.context_processors.debug',
                 'django.template.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
             ],
         },
     },
@@ -86,21 +81,19 @@ TEMPLATES = [
 WSGI_APPLICATION = 'schindia_backend.wsgi.application'
 
 # =============================================================================
-# DATABASE - SQLite always (DynamoDB handles production data via service layer)
+# DATABASE - DynamoDB is the only datastore. The dummy backend means any
+# accidental ORM call fails immediately instead of silently touching SQLite.
 # =============================================================================
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.dummy',
     }
 }
 
 # =============================================================================
-# CUSTOM USER MODEL
+# PASSWORD HASHING
 # =============================================================================
-
-AUTH_USER_MODEL = 'schindia_auth.User'
 
 # Password hashing — prefer argon2 as per security requirements
 PASSWORD_HASHERS = [
@@ -177,15 +170,11 @@ if DJANGO_ENV == 'production' and AWS_ACCESS_KEY_ID:
 # EMAIL CONFIGURATION (AWS SES for production)
 # =============================================================================
 
-if DJANGO_ENV == 'production' and AWS_ACCESS_KEY_ID:
-    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-    EMAIL_HOST = f'email-smtp.{AWS_REGION}.amazonaws.com'
-    EMAIL_PORT = 587
-    EMAIL_USE_TLS = True
-    # SES SMTP credentials are NOT IAM access keys — generate them separately
-    # via AWS Console → SES → SMTP Settings → Create SMTP credentials
-    EMAIL_HOST_USER = config('SES_SMTP_USER', default='')
-    EMAIL_HOST_PASSWORD = config('SES_SMTP_PASSWORD', default='')
+if DJANGO_ENV in ('production', 'dev') and AWS_ACCESS_KEY_ID:
+    # Use SES via boto3 (uses IAM credentials directly, no SMTP creds needed)
+    EMAIL_BACKEND = 'django_ses.SESBackend'
+    AWS_SES_REGION_NAME = AWS_REGION
+    AWS_SES_REGION_ENDPOINT = f'email.{AWS_REGION}.amazonaws.com'
     DEFAULT_FROM_EMAIL = config('AWS_SES_SENDER', default='noreply@shichida.in')
 else:
     # Local: print emails to console
@@ -223,10 +212,14 @@ REST_FRAMEWORK = {
 # =============================================================================
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': True,
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),   # Short-lived; session length is the refresh token's job
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),      # Req 26.5: 7 days for remember me / Req 26.1: 24h session via refresh
+    # No rest_framework_simplejwt.token_blacklist app (that's an ORM/SQLite-backed
+    # table) — revocation instead happens via the DynamoDB blacklist on logout
+    # (schindia_auth.authentication.DynamoAwareJWTAuthentication), so refresh
+    # tokens are not rotated/blacklisted on refresh.
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': False,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
@@ -240,6 +233,9 @@ CORS_ALLOWED_ORIGINS = config(
     cast=Csv()
 )
 CORS_ALLOW_CREDENTIALS = True
+
+# Frontend URL for email links (login, onboarding, etc.)
+FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
 
 # =============================================================================
 # SECURITY (Production only)

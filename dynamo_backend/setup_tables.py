@@ -16,6 +16,8 @@ from .tables import (
     ENROLMENTS_TABLE, JOURNEY_TABLE, NOTES_TABLE,
     INVOICES_TABLE, INVOICE_ITEMS_TABLE, PURCHASES_TABLE,
     ROLES_TABLE, ROLE_PERMISSIONS_TABLE, ROLE_MEMBERS_TABLE,
+    ATTENDANCE_TABLE, COURSE_PROGRESS_TABLE,
+    OTP_TOKENS_TABLE, ROOT_ACCESS_REQUESTS_TABLE, JWT_BLACKLIST_TABLE,
 )
 
 
@@ -86,13 +88,19 @@ TABLE_DEFINITIONS = [
         'AttributeDefinitions': [
             {'AttributeName': 'id', 'AttributeType': 'S'},
             {'AttributeName': 'centre_id', 'AttributeType': 'S'},
+            {'AttributeName': 'room_id', 'AttributeType': 'S'},
         ],
         'GlobalSecondaryIndexes': [
             {
                 'IndexName': 'centre_id-index',
                 'KeySchema': [{'AttributeName': 'centre_id', 'KeyType': 'HASH'}],
                 'Projection': {'ProjectionType': 'ALL'},
-            }
+            },
+            {
+                'IndexName': 'room_id-index',
+                'KeySchema': [{'AttributeName': 'room_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            },
         ],
     },
     {
@@ -278,7 +286,95 @@ TABLE_DEFINITIONS = [
             },
         ],
     },
+    # New Phase 2 tables
+    {
+        'TableName': ATTENDANCE_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+            {'AttributeName': 'child_id', 'AttributeType': 'S'},
+            {'AttributeName': 'date', 'AttributeType': 'S'},
+            {'AttributeName': 'slot_id', 'AttributeType': 'S'},
+            {'AttributeName': 'session_id', 'AttributeType': 'S'},
+        ],
+        'GlobalSecondaryIndexes': [
+            {
+                'IndexName': 'child_id-index',
+                'KeySchema': [
+                    {'AttributeName': 'child_id', 'KeyType': 'HASH'},
+                    {'AttributeName': 'date', 'KeyType': 'RANGE'},
+                ],
+                'Projection': {'ProjectionType': 'ALL'},
+            },
+            {
+                'IndexName': 'slot_id-index',
+                'KeySchema': [{'AttributeName': 'slot_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            },
+            {
+                'IndexName': 'session_id-index',
+                'KeySchema': [{'AttributeName': 'session_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            },
+        ],
+    },
+    {
+        'TableName': COURSE_PROGRESS_TABLE,
+        'KeySchema': [{'AttributeName': 'child_id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'child_id', 'AttributeType': 'S'},
+        ],
+        # No GSI needed — 1:1 relationship, direct get/put by child_id
+    },
+    # Phase: SQLite removal — auth tables
+    {
+        'TableName': OTP_TOKENS_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+            {'AttributeName': 'email', 'AttributeType': 'S'},
+        ],
+        'GlobalSecondaryIndexes': [
+            {
+                'IndexName': 'email-index',
+                'KeySchema': [{'AttributeName': 'email', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            }
+        ],
+    },
+    {
+        'TableName': ROOT_ACCESS_REQUESTS_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+            {'AttributeName': 'email', 'AttributeType': 'S'},
+        ],
+        'GlobalSecondaryIndexes': [
+            {
+                'IndexName': 'email-index',
+                'KeySchema': [{'AttributeName': 'email', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            }
+        ],
+    },
+    {
+        'TableName': JWT_BLACKLIST_TABLE,
+        'KeySchema': [{'AttributeName': 'jti', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'jti', 'AttributeType': 'S'},
+        ],
+        # TTL attribute 'expires_at' enabled separately below via update_time_to_live
+    },
 ]
+
+
+def enable_ttl():
+    """Enable DynamoDB TTL on the JWT blacklist table so expired entries self-purge."""
+    client = get_dynamodb_resource().meta.client
+    client.update_time_to_live(
+        TableName=JWT_BLACKLIST_TABLE,
+        TimeToLiveSpecification={'Enabled': True, 'AttributeName': 'expires_at'},
+    )
 
 
 def create_all_tables():
@@ -313,6 +409,11 @@ def create_all_tables():
 
         dynamodb.create_table(**params)
         print(f"  ✓ {table_name} (created)")
+
+        if table_name == JWT_BLACKLIST_TABLE:
+            dynamodb.meta.client.get_waiter('table_exists').wait(TableName=table_name)
+            enable_ttl()
+            print(f"    ↳ TTL enabled on {table_name}")
 
     print("\nAll tables provisioned successfully!")
 

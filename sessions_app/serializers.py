@@ -1,86 +1,99 @@
 from rest_framework import serializers
-from .models import Session, SessionSlot
+
+# Predefined color palette for auto-assignment (Req 8.9)
+SESSION_COLORS = [
+    {'bg': '#e0f2fe', 'text': '#0369a1'},  # blue
+    {'bg': '#fce7f3', 'text': '#be185d'},  # pink
+    {'bg': '#dcfce7', 'text': '#166534'},  # green
+    {'bg': '#fef3c7', 'text': '#92400e'},  # amber
+    {'bg': '#ede9fe', 'text': '#5b21b6'},  # violet
+    {'bg': '#ffedd5', 'text': '#c2410c'},  # orange
+    {'bg': '#f0fdf4', 'text': '#15803d'},  # emerald
+    {'bg': '#fdf2f8', 'text': '#9d174d'},  # rose
+    {'bg': '#ecfeff', 'text': '#155e75'},  # cyan
+    {'bg': '#fef9c3', 'text': '#854d0e'},  # yellow
+    {'bg': '#f3e8ff', 'text': '#7e22ce'},  # purple
+    {'bg': '#e0e7ff', 'text': '#3730a3'},  # indigo
+]
 
 
-class SessionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Session
-        fields = [
-            'id', 'centre', 'name', 'child_limit', 'age_from', 'age_to',
-            'age_unit', 'duration_hours', 'duration_minutes',
-            'color_bg', 'color_text', 'created_at',
-        ]
-        read_only_fields = ['id', 'created_at']
+def get_next_color(centre_id):
+    """Pick the first colour from the palette not already in use at this centre."""
+    from dynamo_backend.services import sessions_db
+    existing_sessions = sessions_db.list_sessions(str(centre_id))
+    used_colors = {(s.get('color_bg'), s.get('color_text')) for s in existing_sessions}
 
-    def validate(self, data):
-        age_from = data.get('age_from', 0)
-        age_to = data.get('age_to', 5)
-        if age_from >= age_to:
-            raise serializers.ValidationError(
-                {'age_from': 'age_from must be less than age_to.'}
-            )
+    for color in SESSION_COLORS:
+        if (color['bg'], color['text']) not in used_colors:
+            return color
 
-        hours = data.get('duration_hours', 1)
-        minutes = data.get('duration_minutes', 30)
-        if hours * 60 + minutes < 15:
-            raise serializers.ValidationError(
-                {'duration_minutes': 'Total duration must be at least 15 minutes.'}
-            )
-
-        child_limit = data.get('child_limit', 12)
-        if child_limit < 1:
-            raise serializers.ValidationError(
-                {'child_limit': 'Child limit must be at least 1.'}
-            )
-
-        return data
+    # All colors used — cycle based on count
+    count = len(used_colors)
+    return SESSION_COLORS[count % len(SESSION_COLORS)]
 
 
-class SessionSlotSerializer(serializers.ModelSerializer):
-    teacher_ids = serializers.ListField(
-        child=serializers.UUIDField(), write_only=True, required=False
-    )
-    child_ids = serializers.ListField(
-        child=serializers.UUIDField(), write_only=True, required=False
-    )
+class SessionSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    centre = serializers.CharField(source='centre_id', required=False)
+    name = serializers.CharField(max_length=50)
+    child_limit = serializers.IntegerField(default=12)
+    age_from = serializers.IntegerField(default=0)
+    age_to = serializers.IntegerField(default=5)
+    age_unit = serializers.ChoiceField(choices=['months', 'years'], default='years')
+    duration_hours = serializers.IntegerField(default=1)
+    duration_minutes = serializers.IntegerField(default=30)
+    color_bg = serializers.CharField(read_only=True)
+    color_text = serializers.CharField(read_only=True)
+    enrolled_count = serializers.SerializerMethodField()
+    duration_display = serializers.SerializerMethodField()
+    age_range_display = serializers.SerializerMethodField()
+    created_at = serializers.CharField(read_only=True)
 
-    class Meta:
-        model = SessionSlot
-        fields = [
-            'id', 'centre', 'room', 'session', 'day', 'start_time',
-            'booking_type', 'start_date', 'end_date', 'starting_month',
-            'starting_week', 'teachers', 'children', 'teacher_ids',
-            'child_ids', 'notes', 'created_at',
-        ]
-        read_only_fields = ['id', 'created_at', 'teachers', 'children']
+    def get_enrolled_count(self, obj):
+        return len(obj.get('child_ids', [])) if isinstance(obj, dict) else 0
 
-    def create(self, validated_data):
-        teacher_ids = validated_data.pop('teacher_ids', [])
-        child_ids = validated_data.pop('child_ids', [])
+    def get_duration_display(self, obj):
+        """Human-readable duration like '1hr 30min' or '2hr'."""
+        hours = obj.get('duration_hours', 0)
+        minutes = obj.get('duration_minutes', 0)
+        parts = []
+        if hours:
+            parts.append(f"{hours}hr")
+        if minutes:
+            parts.append(f"{minutes}min")
+        return ' '.join(parts) or '0min'
 
-        slot = SessionSlot.objects.create(**validated_data)
+    def get_age_range_display(self, obj):
+        """Human-readable age range like '0–12 months' or '2–3 years'."""
+        return f"{obj.get('age_from', 0)}–{obj.get('age_to', 5)} {obj.get('age_unit', 'years')}"
 
-        if teacher_ids:
-            slot.teachers.set(teacher_ids)
-        if child_ids:
-            slot.children.set(child_ids)
 
-        return slot
+class SessionSlotSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    centre = serializers.CharField(source='centre_id', required=False)
+    room = serializers.CharField(source='room_id', required=False)
+    session = serializers.CharField(source='session_id', required=False)
+    day = serializers.ChoiceField(choices=['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])
+    start_time = serializers.CharField()
+    booking_type = serializers.ChoiceField(choices=['one-off', 'recurring'])
+    start_date = serializers.CharField()
+    end_date = serializers.CharField(required=False, allow_null=True)
+    starting_month = serializers.IntegerField(default=1)
+    starting_week = serializers.IntegerField(default=1)
+    teacher_ids = serializers.ListField(child=serializers.UUIDField(), required=False)
+    child_ids = serializers.ListField(child=serializers.UUIDField(), required=False)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    session_name = serializers.CharField(read_only=True)
+    room_name = serializers.CharField(read_only=True)
+    children_count = serializers.SerializerMethodField()
+    duration_total_minutes = serializers.IntegerField(read_only=True)
+    child_limit = serializers.IntegerField(read_only=True)
+    color_bg = serializers.CharField(read_only=True)
+    color_text = serializers.CharField(read_only=True)
+    created_at = serializers.CharField(read_only=True)
 
-    def update(self, instance, validated_data):
-        teacher_ids = validated_data.pop('teacher_ids', None)
-        child_ids = validated_data.pop('child_ids', None)
-
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-
-        if teacher_ids is not None:
-            instance.teachers.set(teacher_ids)
-        if child_ids is not None:
-            instance.children.set(child_ids)
-
-        return instance
+    def get_children_count(self, obj):
+        return len(obj.get('child_ids', [])) if isinstance(obj, dict) else 0
 
 
 class GenerateSlotsSerializer(serializers.Serializer):

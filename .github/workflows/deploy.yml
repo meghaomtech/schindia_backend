@@ -21,6 +21,6 @@ jobs:
             git pull origin main
             source venv/bin/activate
             pip install -r requirements.txt -q
-            python manage.py migrate --noinput
+            python manage.py create_dynamo_tables
             sudo systemctl restart shichida
             echo "✅ Deployed successfully"

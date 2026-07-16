@@ -73,6 +73,13 @@ class BillingDynamoService:
             self.invoice_items.delete(item['id'])
         return self.invoices.delete(str(invoice_id))
 
+    def add_sent_to(self, invoice_id, channel, target):
+        """Record that an invoice was sent via a channel (email/sms). Embedded on the invoice."""
+        invoice = self.invoices.get(str(invoice_id))
+        sent_to = (invoice or {}).get('sent_to') or []
+        sent_to.append({'channel': channel, 'target': target})
+        return self.invoices.update(str(invoice_id), {'sent_to': sent_to})
+
     def list_invoice_items(self, invoice_id):
         return self.invoice_items.query_by_index('invoice_id-index', 'invoice_id', str(invoice_id))
 

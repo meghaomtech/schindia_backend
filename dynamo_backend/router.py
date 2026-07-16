@@ -1,17 +1,16 @@
 """
-Database router that determines whether to use Django ORM (local SQLite)
-or DynamoDB (production).
+Database router for DynamoDB.
+
+All environments (including local development) use DynamoDB.
+The Django ORM paths exist only as fallback scaffolding and are not
+exercised in normal operation.
 
 Usage in views:
-    from dynamo_backend.router import use_dynamo, get_db_service
+    from dynamo_backend.router import use_dynamo
 
     if use_dynamo():
-        # Use DynamoDB service
         from dynamo_backend.services import centres_db
         centres = centres_db.list_centres()
-    else:
-        # Use Django ORM
-        centres = Centre.objects.all()
 """
 
 from decouple import config
@@ -20,10 +19,10 @@ DJANGO_ENV = config('DJANGO_ENV', default='local')
 
 
 def use_dynamo():
-    """Returns True if the app should use DynamoDB (production/dev on AWS)."""
-    return DJANGO_ENV in ('production', 'dev')
+    """Always True — DynamoDB is the primary datastore for all environments."""
+    return True
 
 
 def is_local():
-    """Returns True if running locally with SQLite."""
+    """Returns True if DJANGO_ENV is 'local'. Used for environment-specific config (e.g. logging)."""
     return DJANGO_ENV == 'local'

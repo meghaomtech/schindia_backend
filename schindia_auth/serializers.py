@@ -1,46 +1,75 @@
 from rest_framework import serializers
-from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 
-from .models import RootAccessRequest
 
-User = get_user_model()
+class UserSerializer(serializers.Serializer):
+    """Serializes a DynamoUser (request.user) into the API user shape."""
 
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'name': instance.get_full_name(),
+            'email': instance.email,
+            'role': instance.role,
+            'status': instance.status,
+            'permissions': self.get_permissions(instance),
+            'centres': self.get_centres(instance),
+            'requested_at': instance.requested_at,
+        }
 
-class UserSerializer(serializers.ModelSerializer):
-    name = serializers.SerializerMethodField()
+    def get_permissions(self, obj):
+        """Return all permissions grouped by centre for permission-based routing (Req 24)."""
+        from dynamo_backend.services import roles_db, centres_db
+        user_id = str(obj.id)
 
-    class Meta:
-        model = User
-        fields = ['id', 'name', 'email', 'role', 'status', 'requested_at']
-        read_only_fields = ['id', 'role', 'status', 'requested_at']
+        centres = centres_db.list_centres()
+        result = {}
+        for centre in centres:
+            cid = centre['id']
+            roles = roles_db.list_roles(cid)
+            for role in roles:
+                members = role.get('members', [])
+                user_is_member = any(m.get('user_id') == user_id for m in members)
+                if user_is_member:
+                    if cid not in result:
+                        result[cid] = {
+                            'roles': [],
+                            'data_scope': role.get('data_scope', 'own'),
+                            'permissions': [],
+                        }
+                    result[cid]['roles'].append(role.get('name', ''))
+                    if role.get('data_scope') == 'all':
+                        result[cid]['data_scope'] = 'all'
+                    for perm in role.get('permissions', []):
+                        if perm.get('visible', True):
+                            key = perm.get('key', '')
+                            if key and key not in result[cid]['permissions']:
+                                result[cid]['permissions'].append(key)
+        return result
 
-    def get_name(self, obj):
-        return obj.get_full_name()
+    def get_centres(self, obj):
+        """Return list of centres the user has access to (Req 24.3)."""
+        from dynamo_backend.services import roles_db, centres_db
+        user_id = str(obj.id)
 
-
-class RegisterSerializer(serializers.Serializer):
-    """
-    For POST /api/auth/register/
-    Creates user with status=approved and returns JWT immediately.
-    """
-    name = serializers.CharField(max_length=300)
-    email = serializers.EmailField()
-    password = serializers.CharField(write_only=True, validators=[validate_password])
-
-    def validate_email(self, value):
-        existing = User.objects.filter(email=value).first()
-        if existing:
-            status = getattr(existing, 'status', 'unknown')
-            if status == 'pending':
-                raise serializers.ValidationError("An access request with this email is already pending approval.")
-            elif status == 'approved':
-                raise serializers.ValidationError("An account with this email already exists. Please log in instead.")
-            elif status == 'rejected':
-                raise serializers.ValidationError("A previous request with this email was rejected. Please contact the administrator.")
-            else:
-                raise serializers.ValidationError("A user with this email already exists.")
-        return value
+        centres = centres_db.list_centres()
+        result = []
+        seen = set()
+        for centre in centres:
+            cid = centre['id']
+            roles = roles_db.list_roles(cid)
+            for role in roles:
+                members = role.get('members', [])
+                if any(m.get('user_id') == user_id for m in members):
+                    if cid not in seen:
+                        seen.add(cid)
+                        result.append({
+                            'id': cid,
+                            'name': centre.get('name', ''),
+                            'system_id': centre.get('system_id', ''),
+                        })
+                    break
+        return result
 
 
 class RequestAccessSerializer(serializers.Serializer):
@@ -53,18 +82,7 @@ class RequestAccessSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
 
     def validate_email(self, value):
-        existing = User.objects.filter(email=value).first()
-        if existing:
-            status = getattr(existing, 'status', 'unknown')
-            if status == 'pending':
-                raise serializers.ValidationError("An access request with this email is already pending approval.")
-            elif status == 'approved':
-                raise serializers.ValidationError("An account with this email already exists. Please log in instead.")
-            elif status == 'rejected':
-                raise serializers.ValidationError("A previous request with this email was rejected. Please contact the administrator.")
-            else:
-                raise serializers.ValidationError("A user with this email already exists.")
-        return value
+        return value.strip().lower()
 
 
 class RequestRootAccessSerializer(serializers.Serializer):
@@ -73,25 +91,9 @@ class RequestRootAccessSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
 
     def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("A user with this email already exists.")
-        if RootAccessRequest.objects.filter(email=value, status='pending').exists():
-            raise serializers.ValidationError("A root access request for this email is already pending.")
-        return value
+        return value.strip().lower()
 
 
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
-
-
-class AccessRequestSerializer(serializers.ModelSerializer):
-    name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = User
-        fields = ['id', 'name', 'email', 'role', 'status', 'requested_at']
-        read_only_fields = ['id', 'name', 'email', 'role', 'requested_at']
-
-    def get_name(self, obj):
-        return obj.get_full_name()

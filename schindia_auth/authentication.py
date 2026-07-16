@@ -1,22 +1,22 @@
 """
-Custom JWT authentication that supports DynamoDB users.
+Custom JWT authentication backed entirely by DynamoDB.
 
-When use_dynamo() is True, the standard SimpleJWT authentication will fail
-because it tries User.objects.get(id=token['user_id']) and the user only
-exists in DynamoDB. This class overrides get_user() to fetch from DDB instead.
+The standard SimpleJWT authentication does User.objects.get(id=token['user_id']),
+which would hit SQLite — this class fetches from DynamoDB instead, and checks
+the DynamoDB blacklist table so tokens revoked on logout are rejected immediately.
 """
 
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
-from dynamo_backend.router import use_dynamo
 
 
 class DynamoAwareJWTAuthentication(JWTAuthentication):
     def get_user(self, validated_token):
-        if not use_dynamo():
-            return super().get_user(validated_token)
+        from dynamo_backend.services import auth_db, blacklist_db
 
-        from dynamo_backend.services import auth_db
+        jti = validated_token.get('jti')
+        if jti and blacklist_db.is_blacklisted(jti):
+            raise AuthenticationFailed('Token has been revoked.')
 
         user_id = validated_token.get('user_id')
         if not user_id:
@@ -28,6 +28,9 @@ class DynamoAwareJWTAuthentication(JWTAuthentication):
 
         if not user.get('is_active', True):
             raise AuthenticationFailed('User is inactive.')
+
+        if user.get('status') != 'approved':
+            raise AuthenticationFailed('User account is not approved.')
 
         # Return a simple object that DRF can use as request.user
         return DynamoUser(user)
@@ -44,11 +47,16 @@ class DynamoUser:
         self.username = data.get('username', data['email'])
         self.first_name = data.get('first_name', '')
         self.last_name = data.get('last_name', '')
-        self.role = data.get('role', 'admin')
-        self.status = data.get('status', 'approved')
-        self.is_active = data.get('is_active', True)
+        self.role = data.get('role', '')
+        self.status = data.get('status', '')
+        self.notification_preference = data.get('notification_preference', 'all')
+        self.email_verified = data.get('email_verified', False)
+        self.is_active = data.get('is_active', False)
+        self.is_staff = False
+        self.is_superuser = False
         self.is_authenticated = True
         self.is_anonymous = False
+        self.requested_at = data.get('requested_at')
 
     def get_full_name(self):
         return f"{self.first_name} {self.last_name}".strip()

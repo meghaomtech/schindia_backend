@@ -10,6 +10,22 @@ urlpatterns = [
     # Must be before router.urls so 'summary' isn't matched as a pk
     path('invoices/summary/', views.invoice_summary, name='invoice-summary'),
     path('', include(router.urls)),
+    # Centre-level invoice endpoints (Req 29)
+    path(
+        'centres/<uuid:centre_pk>/invoices/',
+        views.centre_invoices,
+        name='centre-invoices-list'
+    ),
+    path(
+        'centres/<uuid:centre_pk>/invoices/generate-data/',
+        views.invoice_generate_data,
+        name='centre-invoice-generate-data'
+    ),
+    path(
+        'centres/<uuid:centre_pk>/invoices/payments/',
+        views.centre_payments,
+        name='centre-payments'
+    ),
     # Nested under child
     path(
         'children/<uuid:child_pk>/invoices/',
