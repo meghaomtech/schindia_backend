@@ -353,14 +353,16 @@ def reject_root_access_request(request, pk):
 def otp_request(request):
     """
     Request OTP for login (Req 21.1-2).
-    Sends a 6-digit code to the submitted email.
-    Returns generic message to prevent email enumeration (Req 21.10).
+    Validates email + password first, then sends a 6-digit code to the email.
+    Unknown emails get a generic response to prevent email enumeration (Req 21.10);
+    a known email with a wrong password gets an explicit "Invalid credentials" error.
     """
     email = request.data.get('email', '').strip().lower()
+    password = request.data.get('password', '')
 
-    if not email:
+    if not email or not password:
         return Response(
-            {'detail': 'Email address is required.'},
+            {'detail': 'Email and password are required.'},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -371,6 +373,12 @@ def otp_request(request):
     if not user:
         # Return generic message even if email not found
         return Response(generic_response)
+
+    if not auth_db.verify_password(user, password):
+        return Response(
+            {'detail': 'Invalid credentials.'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
 
     # Check if email is locked (Req 21.7) — keyed on email, not per-row
     # Moved after user-existence check so 429 doesn't leak email registration status
