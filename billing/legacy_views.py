@@ -53,10 +53,13 @@ def centers_view(request):
         # Remove non-updatable fields
         data.pop('id', None)
         data.pop('rooms', None)
-        center_code = data.get('center_code', '')
+        center_code = data.get('center_code', '') or data.get('system_id', '')
         if center_code:
             all_centres = centres_db.list_centres()
-            existing = next((c for c in all_centres if c.get('center_code') == center_code), None)
+            existing = next(
+                (c for c in all_centres if c.get('center_code') == center_code or c.get('system_id') == center_code),
+                None,
+            )
             if existing:
                 centres_db.update_centre(existing['id'], data)
                 updated = centres_db.get_centre(existing['id'])
