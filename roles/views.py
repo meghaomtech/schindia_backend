@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import roles_db, centres_db, auth_db
+from .permissions_catalog import PERMISSION_CATEGORIES
 
 logger = logging.getLogger(__name__)
 
@@ -216,23 +217,13 @@ def permissions_matrix(request, centre_pk):
     if not centre:
         return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-    # Define all permission keys grouped by module
-    permission_modules = {
-        'Centres': ['centres.view', 'centres.edit'],
-        'Sessions': ['sessions.view', 'sessions.edit'],
-        'Timetable': ['timetable.view', 'timetable.edit'],
-        'Children': ['children.view', 'children.edit'],
-        'Invoices': ['invoices.view', 'invoices.edit'],
-        'People & Roles': ['people.view', 'people.manage', 'roles.view', 'roles.manage'],
-    }
-
     roles = roles_db.list_roles(str(centre_pk))
 
     matrix = {}
-    for module_name, keys in permission_modules.items():
+    for module_name, entries in PERMISSION_CATEGORIES.items():
         matrix[module_name] = []
-        for key in keys:
-            row = {'key': key, 'roles': {}}
+        for key, label in entries:
+            row = {'key': key, 'label': label, 'roles': {}}
             for role in roles:
                 perm = next((p for p in role.get('permissions', []) if p.get('key') == key), None)
                 row['roles'][role['id']] = {

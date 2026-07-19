@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import centres_db, sessions_db, children_db, roles_db
+from roles.permissions_catalog import ALL_PERMISSION_KEYS
 from .serializers import CentreCreateSerializer, RoomSerializer
 
 
@@ -38,19 +39,10 @@ class CentreViewSet(viewsets.ViewSet):
         for room_data in rooms_data:
             centres_db.create_room(centre['id'], room_data)
 
-        # Create default Admin role with all permissions (Req 15.4)
-        permission_keys = [
-            'centres.view', 'centres.edit',
-            'sessions.view', 'sessions.edit',
-            'timetable.view', 'timetable.edit',
-            'children.view', 'children.edit',
-            'invoices.view', 'invoices.edit',
-            'people.view', 'people.manage',
-            'roles.view', 'roles.manage',
-        ]
+        # Create default Admin role with every permission in the catalog (Req 15.4)
         permissions = [
             {'key': key, 'edit': True, 'visible': True}
-            for key in permission_keys
+            for key in ALL_PERMISSION_KEYS
         ]
         role_data = {
             'name': 'Admin',
@@ -76,7 +68,7 @@ class CentreViewSet(viewsets.ViewSet):
         if not centre:
             return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
         # Validate through serializer (partial=True for PATCH)
-        serializer = self.get_serializer(data=request.data, partial=True)
+        serializer = self.get_serializer(instance=centre, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         updated = centres_db.update_centre(str(kwargs['pk']), serializer.validated_data)
         if not updated:
