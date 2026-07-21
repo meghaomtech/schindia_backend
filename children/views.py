@@ -41,6 +41,9 @@ class ChildViewSet(viewsets.ViewSet):
         elif data.get('centre'):
             data['centre_id'] = str(data.pop('centre'))
 
+        if data.get('session'):
+            data['session_id'] = str(data.pop('session'))
+
         # Required field validation
         required_fields = ['first_name', 'last_name', 'gender', 'date_of_birth', 'start_date']
         missing = [f for f in required_fields if not data.get(f)]
@@ -88,7 +91,14 @@ class ChildViewSet(viewsets.ViewSet):
         centre_pk = self.kwargs.get('centre_pk')
         if centre_pk and child.get('centre_id') != str(centre_pk):
             return Response({'detail': 'Child not found.'}, status=status.HTTP_404_NOT_FOUND)
-        updated = children_db.update_child(str(kwargs['pk']), request.data)
+
+        data = request.data.copy()
+        if 'centre' in data:
+            data['centre_id'] = data.pop('centre')
+        if 'session' in data:
+            data['session_id'] = data.pop('session')
+
+        updated = children_db.update_child(str(kwargs['pk']), data)
         return Response(updated)
 
     def destroy(self, request, *args, **kwargs):
