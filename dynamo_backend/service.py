@@ -78,35 +78,49 @@ class DynamoDBService:
         return None
 
     def update(self, item_id: str, updates: dict) -> Optional[dict]:
-        """Update an item by ID. Returns updated item."""
+        """Update an item by ID. Returns updated item.
+
+        A value of None removes that attribute (used to clear optional
+        foreign keys like session_id) rather than being silently skipped.
+        """
         updates['updated_at'] = datetime.utcnow().isoformat()
 
         # Build update expression
-        update_parts = []
+        set_parts = []
+        remove_parts = []
         expression_values = {}
         expression_names = {}
 
         for key, value in updates.items():
-            if value is None:
-                continue
             safe_key = f"#{key}"
-            val_key = f":{key}"
-            update_parts.append(f"{safe_key} = {val_key}")
-            expression_values[val_key] = _serialize_value(value)
             expression_names[safe_key] = key
+            if value is None:
+                remove_parts.append(safe_key)
+            else:
+                val_key = f":{key}"
+                set_parts.append(f"{safe_key} = {val_key}")
+                expression_values[val_key] = _serialize_value(value)
 
-        if not update_parts:
+        if not set_parts and not remove_parts:
             return self.get(item_id)
 
-        update_expression = "SET " + ", ".join(update_parts)
+        clauses = []
+        if set_parts:
+            clauses.append("SET " + ", ".join(set_parts))
+        if remove_parts:
+            clauses.append("REMOVE " + ", ".join(remove_parts))
+        update_expression = " ".join(clauses)
 
-        response = self.table.update_item(
+        kwargs = dict(
             Key={'id': item_id},
             UpdateExpression=update_expression,
-            ExpressionAttributeValues=expression_values,
             ExpressionAttributeNames=expression_names,
             ReturnValues='ALL_NEW',
         )
+        if expression_values:
+            kwargs['ExpressionAttributeValues'] = expression_values
+
+        response = self.table.update_item(**kwargs)
         return _deserialize_item(response.get('Attributes', {}))
 
     def delete(self, item_id: str) -> bool:

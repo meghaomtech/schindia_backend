@@ -91,6 +91,7 @@ class CentreCreateSerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=15)
     email = serializers.EmailField()
     manager_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    max_capacity = serializers.IntegerField(required=False, default=500)
     rooms = RoomSerializer(many=True, required=False)
     closure_dates = serializers.JSONField(required=False, default=list)
     opening_times = serializers.JSONField(required=False, default=dict)
