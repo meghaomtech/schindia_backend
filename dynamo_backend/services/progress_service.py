@@ -1,7 +1,7 @@
 """DynamoDB service for Journey, Notes, Attendance, and CourseProgress operations."""
 
 import uuid
-from datetime import timedelta, date
+from datetime import timedelta, date, datetime
 from ..service import DynamoDBService
 from ..tables import JOURNEY_TABLE, NOTES_TABLE, ATTENDANCE_TABLE, COURSE_PROGRESS_TABLE
 
@@ -86,6 +86,41 @@ class ProgressDynamoService:
     def delete_attendance(self, attendance_id):
         return self.attendance.delete(str(attendance_id))
 
+    def list_attendance_by_slot(self, slot_id, att_date=None):
+        """List attendance records for a slot (timetable view), optionally for one date."""
+        records = self.attendance.query_by_index('slot_id-index', 'slot_id', str(slot_id))
+        if att_date:
+            records = [r for r in records if r.get('date') == str(att_date)]
+        return records
+
+    def mark_attendance(self, child_id, slot_id, session_id, att_date, att_status, marked_by_id, marked_by_name):
+        """Create or update the attendance record for a child on a slot/date (upsert)."""
+        existing = next(
+            (r for r in self.list_attendance_by_slot(slot_id, att_date) if r.get('child_id') == str(child_id)),
+            None,
+        )
+        marked_at = datetime.utcnow().isoformat()
+
+        if existing:
+            return self.attendance.update(existing['id'], {
+                'status': att_status,
+                'marked_by_id': str(marked_by_id),
+                'marked_by_name': marked_by_name,
+                'marked_at': marked_at,
+            })
+
+        item = {
+            'child_id': str(child_id),
+            'slot_id': str(slot_id),
+            'session_id': str(session_id) if session_id else None,
+            'date': str(att_date),
+            'status': att_status,
+            'marked_by_id': str(marked_by_id),
+            'marked_by_name': marked_by_name,
+            'marked_at': marked_at,
+        }
+        return self.attendance.create(item)
+
     # Course Progress CRUD (child_id is the partition key — 1:1 relationship)
     def get_course_progress(self, child_id):
         return self.course_progress.get(str(child_id))
@@ -107,11 +142,12 @@ class ProgressDynamoService:
 
         # Attendance (already sorted by date desc from list_attendance)
         for att in self.list_attendance(child_id):
+            verb = 'Attended' if att.get('status') == 'present' else 'Absent from'
             activities.append({
                 'type': 'attendance',
                 'date': att.get('date', ''),
-                'text': f"Attended {att.get('session_name', 'session')} with {att.get('teacher_name', 'teacher')}",
-                'status': att.get('status', 'attended'),
+                'text': f"{verb} {att.get('session_name', 'session')} — marked by {att.get('marked_by_name', 'staff')}",
+                'status': att.get('status', 'present'),
                 'created_at': att.get('created_at', ''),
             })
 
@@ -152,7 +188,7 @@ class ProgressDynamoService:
 
         # Single fetch for all attendance
         all_records = self.list_attendance(child_id)
-        attended = [r for r in all_records if r.get('status') == 'attended']
+        attended = [r for r in all_records if r.get('status') == 'present']
         total_sessions = len(attended)
         sessions_this_week = len([
             r for r in attended

@@ -1,3 +1,5 @@
+from datetime import date as date_type
+
 from rest_framework import serializers
 
 # Predefined color palette for auto-assignment (Req 8.9)
@@ -94,6 +96,17 @@ class SessionSlotSerializer(serializers.Serializer):
 
     def get_children_count(self, obj):
         return len(obj.get('child_ids', [])) if isinstance(obj, dict) else 0
+
+
+class SlotAttendanceMarkSerializer(serializers.Serializer):
+    child_id = serializers.UUIDField()
+    date = serializers.DateField()
+    status = serializers.ChoiceField(choices=['present', 'absent'])
+
+    def validate_date(self, value):
+        if value > date_type.today():
+            raise serializers.ValidationError('Cannot record attendance for a future date.')
+        return value
 
 
 class GenerateSlotsSerializer(serializers.Serializer):

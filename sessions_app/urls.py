@@ -36,6 +36,16 @@ urlpatterns = [
         name='centre-slots-generate'
     ),
     path(
+        'centres/<uuid:centre_pk>/slots/<uuid:slot_pk>/attendance/',
+        views.slot_attendance,
+        name='centre-slot-attendance'
+    ),
+    path(
+        'centres/<uuid:centre_pk>/slots/<uuid:slot_pk>/attendance/mark/',
+        views.mark_slot_attendance,
+        name='centre-slot-attendance-mark'
+    ),
+    path(
         'centres/<uuid:centre_pk>/timetable/',
         views.timetable,
         name='centre-timetable'

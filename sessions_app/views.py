@@ -6,8 +6,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
-from dynamo_backend.services import sessions_db, centres_db
-from .serializers import SessionSerializer, SessionSlotSerializer, GenerateSlotsSerializer
+from dynamo_backend.services import sessions_db, centres_db, children_db, progress_db
+from .serializers import SessionSerializer, SessionSlotSerializer, GenerateSlotsSerializer, SlotAttendanceMarkSerializer
 
 
 DAY_MAP = {0: 'mon', 1: 'tue', 2: 'wed', 3: 'thu', 4: 'fri', 5: 'sat', 6: 'sun'}
@@ -263,6 +263,81 @@ def generate_slots(request, centre_pk):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsApprovedUser])
+def slot_attendance(request, centre_pk, slot_pk):
+    """
+    Enrolled children for a slot with their attendance status for a given date
+    (defaults to today). Backs the timetable slot-detail attendance list.
+    """
+    slot = sessions_db.get_slot(str(slot_pk))
+    if not slot or slot.get('centre_id') != str(centre_pk):
+        return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    att_date = request.query_params.get('date') or date.today().isoformat()
+    session = sessions_db.get_session(slot.get('session_id')) or {}
+
+    records_by_child = {
+        r['child_id']: r for r in progress_db.list_attendance_by_slot(str(slot_pk), att_date)
+    }
+
+    children = []
+    for child_id in slot.get('child_ids', []):
+        child = children_db.get_child(child_id)
+        if not child:
+            continue
+        record = records_by_child.get(child_id)
+        children.append({
+            'child_id': child_id,
+            'first_name': child.get('first_name', ''),
+            'last_name': child.get('last_name', ''),
+            'status': record.get('status') if record else None,
+            'attendance_id': record.get('id') if record else None,
+            'marked_by_name': record.get('marked_by_name') if record else None,
+            'marked_at': record.get('marked_at') if record else None,
+        })
+
+    return Response({
+        'slot_id': str(slot_pk),
+        'session_name': session.get('name', ''),
+        'date': att_date,
+        'children': children,
+        'attendance_taken': any(c['status'] for c in children),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def mark_slot_attendance(request, centre_pk, slot_pk):
+    """Mark (create or update) a single child's Present/Absent status for a slot on a date."""
+    slot = sessions_db.get_slot(str(slot_pk))
+    if not slot or slot.get('centre_id') != str(centre_pk):
+        return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    serializer = SlotAttendanceMarkSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+
+    child_id = str(data['child_id'])
+    if child_id not in slot.get('child_ids', []):
+        return Response(
+            {'child_id': ['This child is not enrolled in this slot.']},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    marked_by_name = request.user.get_full_name() or request.user.email
+    record = progress_db.mark_attendance(
+        child_id=child_id,
+        slot_id=str(slot_pk),
+        session_id=slot.get('session_id'),
+        att_date=data['date'].isoformat(),
+        att_status=data['status'],
+        marked_by_id=str(request.user.id),
+        marked_by_name=marked_by_name,
+    )
+    return Response(record, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
 def timetable(request, centre_pk):
     """
     Return timetable data for a centre for a given week.
@@ -373,6 +448,10 @@ def _timetable_dynamo(request, centre_id, week_start, week_end):
         day = DAY_MAP.get(slot_date.weekday(), 'mon')
         children_count = len(slot.get('child_ids', []))
 
+        attendance_taken = False
+        if children_count:
+            attendance_taken = bool(progress_db.list_attendance_by_slot(slot.get('id', ''), slot_date.isoformat()))
+
         timetable_data[day].append({
             'id': slot.get('id', ''),
             'session_name': session.get('name', ''),
@@ -387,6 +466,7 @@ def _timetable_dynamo(request, centre_id, week_start, week_end):
             'date': slot_date.isoformat(),
             'color_bg': session.get('color_bg', '#e0f2fe'),
             'color_text': session.get('color_text', '#0369a1'),
+            'attendance_taken': attendance_taken,
         })
 
     # Sort each day

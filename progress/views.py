@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes
@@ -6,7 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
-from dynamo_backend.services import progress_db, children_db, centres_db, sessions_db, auth_db
+from dynamo_backend.services import progress_db, children_db, centres_db, sessions_db
 from billing.notifications import send_milestone_notification, send_attendance_notification
 from .serializers import (
     JourneyEntrySerializer,
@@ -149,6 +149,10 @@ class AttendanceViewSet(viewsets.ViewSet):
                     status=status.HTTP_409_CONFLICT
                 )
 
+        data['marked_by_id'] = str(request.user.id)
+        data['marked_by_name'] = request.user.get_full_name() or request.user.email
+        data['marked_at'] = datetime.utcnow().isoformat()
+
         record = progress_db.create_attendance(str(child_pk), data)
 
         child = children_db.get_child(str(child_pk))
@@ -159,14 +163,7 @@ class AttendanceViewSet(viewsets.ViewSet):
 
             session = sessions_db.get_session(str(session_id)) if session_id else None
 
-            teacher_name = 'Unknown'
-            teacher_id = data.get('teacher_id') or data.get('teacher')
-            if teacher_id:
-                teacher = auth_db.get_user_by_id(str(teacher_id))
-                if teacher:
-                    teacher_name = f"{teacher.get('first_name', '')} {teacher.get('last_name', '')}".strip() or teacher.get('email', 'Unknown')
-
-            send_attendance_notification(record, child, session=session, teacher_name=teacher_name)
+            send_attendance_notification(record, child, session=session, teacher_name=data['marked_by_name'])
 
         return Response(record, status=status.HTTP_201_CREATED)
 
