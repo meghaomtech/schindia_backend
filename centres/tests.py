@@ -144,27 +144,20 @@ class CentreCreateTests(CentresAPITestCase):
                 self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
                 self.assertIn("bank_details", resp.data)
 
-    def test_create_silently_allows_bank_details_to_be_omitted_entirely(self, mock_centres_db, mock_roles_db):
+    def test_create_requires_bank_details_when_omitted_entirely(self, mock_centres_db, mock_roles_db):
         """
-        Known gotcha, not a crash: CentreCreateSerializer.bank_details is
-        required=False with no default, and validate_bank_details() only runs
-        when the field is present in the input. DRF's Field.run_validation()
-        raises SkipField for an absent optional field with no default, so the
-        "bank details are required when creating a centre" check in
-        validate_bank_details() (centres/serializers.py) never executes when the
-        key is left out of the request body — only when it's sent explicitly as
-        null or {} (see the test above). So a client that just omits the key
-        bypasses the requirement entirely. Pinning this down so a fix (e.g.
-        giving the field default=None) is a deliberate, visible change.
+        CentreCreateSerializer.bank_details has default=None (see PR #15 review), so
+        validate_bank_details() runs even when the key is left out of the request body
+        entirely — not just when it's sent explicitly as null or {} (see the test above).
+        A client that omits the key gets the same "bank details required" rejection.
         """
-        mock_centres_db.create_centre.return_value = {"id": CENTRE_ID}
-        mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "rooms": []}
-        mock_roles_db.create_role.return_value = {"id": "role-1"}
         payload = {k: v for k, v in VALID_CENTRE_PAYLOAD.items() if k != "bankDetails"}
 
         resp = self.client.post('/api/v1/centres/', payload, format='json')
 
-        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("bank_details", resp.data)
+        mock_centres_db.create_centre.assert_not_called()
 
     def test_create_rejects_invalid_postcode(self, mock_centres_db, mock_roles_db):
         payload = {**VALID_CENTRE_PAYLOAD, "postcode": "abc"}

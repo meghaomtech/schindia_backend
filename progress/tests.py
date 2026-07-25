@@ -505,42 +505,37 @@ class CourseProgressViewSetTests(ProgressAPITestCase):
 
 
 @patch('progress.views.progress_db')
-class CourseProgressNestedDetailRouteBugTests(ProgressAPITestCase):
+class CourseProgressNestedDetailRouteTests(ProgressAPITestCase):
     """
-    Known bug (same pattern as billing.tests.PurchaseNestedDetailRouteBugTests):
     progress/urls.py registers
 
-        children/<child_pk>/course-progress/<pk>/
-            -> {'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}
+        children/<child_pk>/course-progress/<pk>/ -> {'get': 'retrieve', 'patch': 'partial_update'}
 
-    but CourseProgressViewSet never defines destroy() — there's no delete operation
-    for course progress by design (it's an upsert-only, child_id-keyed resource).
-    DRF's ViewSetMixin.as_view() calls getattr(self, action) for every action in
-    that mapping while setting up the view, regardless of the incoming HTTP method,
-    so a bare getattr(self, 'destroy') blows up with AttributeError before dispatch()
-    even looks at request.method. As a result GET, PATCH, and DELETE on this nested
-    URL are all broken (500), even though only DELETE/destroy is actually missing.
-
-    retrieve()/partial_update() on course progress do work — via the standalone
-    /api/v1/course-progress/<pk>/ route, which only maps methods that exist (see
-    CourseProgressViewSetTests above). Pinning down today's behavior here so a fix
-    (adding destroy(), or dropping 'delete' from the nested route) is a deliberate,
-    visible change.
+    with no 'delete' entry, since course progress is upsert-only by design and
+    CourseProgressViewSet doesn't implement destroy() (see PR #15 review). DELETE on
+    this nested URL correctly 405s, while GET/PATCH work as expected.
     """
 
-    def test_get_crashes(self, mock_progress_db):
-        with self.assertRaises(AttributeError):
-            self.client.get(f'/api/v1/children/{CHILD_ID}/course-progress/{CHILD_ID}/')
+    def test_get_returns_progress(self, mock_progress_db):
+        mock_progress_db.get_course_progress.return_value = {"child_id": CHILD_ID, "current_month": 2}
 
-    def test_patch_crashes_even_though_partial_update_exists(self, mock_progress_db):
-        with self.assertRaises(AttributeError):
-            self.client.patch(
-                f'/api/v1/children/{CHILD_ID}/course-progress/{CHILD_ID}/', {"currentMonth": 3}, format='json'
-            )
+        resp = self.client.get(f'/api/v1/children/{CHILD_ID}/course-progress/{CHILD_ID}/')
 
-    def test_delete_crashes(self, mock_progress_db):
-        with self.assertRaises(AttributeError):
-            self.client.delete(f'/api/v1/children/{CHILD_ID}/course-progress/{CHILD_ID}/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_patch_updates_progress(self, mock_progress_db):
+        mock_progress_db.set_course_progress.return_value = {"child_id": CHILD_ID, "current_month": 3}
+
+        resp = self.client.patch(
+            f'/api/v1/children/{CHILD_ID}/course-progress/{CHILD_ID}/', {"currentMonth": 3}, format='json'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_delete_is_not_allowed(self, mock_progress_db):
+        resp = self.client.delete(f'/api/v1/children/{CHILD_ID}/course-progress/{CHILD_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
 
 
 # =============================================================================

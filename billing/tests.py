@@ -383,8 +383,8 @@ class PurchaseViewSetTests(BillingAPITestCase):
         mock_db.create_purchase.assert_called_once_with(CHILD_ID, {"name": "Uniform"})
 
     def test_partial_update_purchase_via_router_route(self, mock_db):
-        # The nested children/<child_pk>/purchases/<pk>/ route is broken for every verb —
-        # see PurchaseNestedDetailRouteBugTests below — so this exercises the (working)
+        # The nested children/<child_pk>/purchases/<pk>/ route doesn't support GET
+        # (see PurchaseNestedDetailRouteTests below), so this exercises the
         # router-generated /api/v1/purchases/<pk>/ route instead.
         mock_db.update_purchase.return_value = {"id": PURCHASE_ID, "name": "Updated"}
 
@@ -401,35 +401,35 @@ class PurchaseViewSetTests(BillingAPITestCase):
 
 
 @patch('billing.views.billing_db')
-class PurchaseNestedDetailRouteBugTests(BillingAPITestCase):
+class PurchaseNestedDetailRouteTests(BillingAPITestCase):
     """
-    Known bug: billing/urls.py registers
+    billing/urls.py registers
 
-        children/<child_pk>/purchases/<pk>/ -> {'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}
+        children/<child_pk>/purchases/<pk>/ -> {'patch': 'partial_update', 'delete': 'destroy'}
 
-    but PurchaseViewSet never defines retrieve(). DRF's ViewSetMixin.as_view() calls
-    getattr(self, action) for *every* action in that mapping while setting up the view —
-    not just the one matching the incoming HTTP method — so a plain getattr(self, 'retrieve')
-    blows up with AttributeError before dispatch() even looks at the request method. As a
-    result GET, PATCH, and DELETE on this nested URL are all broken (500), even though only
-    GET/retrieve is actually missing.
-
-    These tests pin down today's (buggy) behavior so a fix — implementing retrieve(), or
-    dropping 'get' from the route — is a deliberate, visible change rather than a silent
-    regression. Once fixed, replace assertRaises(AttributeError) with the expected status code.
+    with no 'get' entry, since PurchaseViewSet doesn't implement retrieve() (see PR #15
+    review). GET on this nested URL correctly 405s, while PATCH/DELETE — which do have
+    corresponding methods — work as expected.
     """
 
-    def test_get_crashes(self, mock_db):
-        with self.assertRaises(AttributeError):
-            self.client.get(f'/api/v1/children/{CHILD_ID}/purchases/{PURCHASE_ID}/')
+    def test_get_is_not_allowed(self, mock_db):
+        resp = self.client.get(f'/api/v1/children/{CHILD_ID}/purchases/{PURCHASE_ID}/')
 
-    def test_patch_crashes_even_though_partial_update_exists(self, mock_db):
-        with self.assertRaises(AttributeError):
-            self.client.patch(f'/api/v1/children/{CHILD_ID}/purchases/{PURCHASE_ID}/', {"name": "x"}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
 
-    def test_delete_crashes_even_though_destroy_exists(self, mock_db):
-        with self.assertRaises(AttributeError):
-            self.client.delete(f'/api/v1/children/{CHILD_ID}/purchases/{PURCHASE_ID}/')
+    def test_patch_updates_purchase(self, mock_db):
+        mock_db.update_purchase.return_value = {"id": PURCHASE_ID, "name": "x"}
+
+        resp = self.client.patch(f'/api/v1/children/{CHILD_ID}/purchases/{PURCHASE_ID}/', {"name": "x"}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_db.update_purchase.assert_called_once_with(PURCHASE_ID, {"name": "x"})
+
+    def test_delete_removes_purchase(self, mock_db):
+        resp = self.client.delete(f'/api/v1/children/{CHILD_ID}/purchases/{PURCHASE_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        mock_db.delete_purchase.assert_called_once_with(PURCHASE_ID)
 
 
 # =============================================================================

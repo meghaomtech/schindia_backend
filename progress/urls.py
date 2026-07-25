@@ -50,7 +50,11 @@ urlpatterns = [
     ),
     path(
         'children/<uuid:child_pk>/course-progress/<uuid:pk>/',
-        views.CourseProgressViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}),
+        # No 'delete': 'destroy' — course progress is upsert-only by design and
+        # CourseProgressViewSet doesn't implement destroy(). DRF's ViewSetMixin.as_view()
+        # resolves every action in this mapping eagerly, so including a missing action
+        # here would 500 on GET/PATCH too (see PR #15).
+        views.CourseProgressViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update'}),
         name='child-course-progress-detail'
     ),
     # Child activity feed (unified timeline)
