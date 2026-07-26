@@ -1,6 +1,11 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 from . import views
+from .authentication import DynamoAwareTokenRefreshSerializer
+
+
+class DynamoAwareTokenRefreshView(TokenRefreshView):
+    serializer_class = DynamoAwareTokenRefreshSerializer
 
 urlpatterns = [
     # Access request (person requests access with email + password)
@@ -10,7 +15,7 @@ urlpatterns = [
     path('login/', views.otp_request, name='login'),  # Step 1: enter email, get OTP
     path('login/verify/', views.otp_verify, name='login-verify'),  # Step 2: enter OTP, get JWT
     # Token management
-    path('refresh/', TokenRefreshView.as_view(), name='token-refresh'),
+    path('refresh/', DynamoAwareTokenRefreshView.as_view(), name='token-refresh'),
     path('verify/', TokenVerifyView.as_view(), name='token-verify'),
     path('logout/', views.logout_view, name='logout'),
     # User info
