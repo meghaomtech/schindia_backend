@@ -44,7 +44,10 @@ urlpatterns = [
     ),
     path(
         'children/<uuid:child_pk>/purchases/<uuid:pk>/',
-        views.PurchaseViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}),
+        # No 'get': 'retrieve' — PurchaseViewSet doesn't implement retrieve(), and
+        # DRF's ViewSetMixin.as_view() resolves every action in this mapping eagerly,
+        # so including a missing action here would 500 on PATCH/DELETE too (see PR #15).
+        views.PurchaseViewSet.as_view({'patch': 'partial_update', 'delete': 'destroy'}),
         name='child-purchases-detail'
     ),
 ]

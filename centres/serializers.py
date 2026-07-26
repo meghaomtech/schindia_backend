@@ -96,7 +96,7 @@ class CentreCreateSerializer(serializers.Serializer):
     rooms = RoomSerializer(many=True, required=False)
     closure_dates = serializers.JSONField(required=False, default=list)
     opening_times = serializers.JSONField(required=False, default=dict)
-    bank_details = serializers.JSONField(required=False, allow_null=True)
+    bank_details = serializers.JSONField(required=False, allow_null=True, default=None)
 
     def validate_name(self, value):
         if not value or len(value.strip()) == 0:
