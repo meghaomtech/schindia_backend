@@ -8,6 +8,8 @@ the DynamoDB blacklist table so tokens revoked on logout are rejected immediatel
 
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from rest_framework_simplejwt.settings import api_settings
 
 
 class DynamoAwareJWTAuthentication(JWTAuthentication):
@@ -63,3 +65,29 @@ class DynamoUser:
 
     def __str__(self):
         return self.email
+
+
+class DynamoAwareTokenRefreshSerializer(TokenRefreshSerializer):
+    """Same fix as DynamoAwareJWTAuthentication, applied to token refresh.
+
+    The stock TokenRefreshSerializer does
+    get_user_model().objects.get(id=user_id) to re-check the user is still
+    active, which hits Django's ORM (auth.User, integer AutoField id) with
+    our DynamoDB UUID and raises ValueError: Field 'id' expected a number.
+    """
+
+    def validate(self, attrs):
+        refresh = self.token_class(attrs['refresh'])
+
+        user_id = refresh.payload.get(api_settings.USER_ID_CLAIM)
+        if user_id:
+            from dynamo_backend.services import auth_db
+
+            user = auth_db.get_user_by_id(str(user_id))
+            if not user or not user.get('is_active', True):
+                raise AuthenticationFailed(
+                    'No active account found for the given token.',
+                    code='no_active_account',
+                )
+
+        return {'access': str(refresh.access_token)}
