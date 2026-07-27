@@ -64,16 +64,73 @@ class CentreViewSet(viewsets.ViewSet):
         return Response(centre, status=status.HTTP_201_CREATED)
 
     def partial_update(self, request, *args, **kwargs):
-        centre = centres_db.get_centre(str(kwargs['pk']))
+        centre_id = str(kwargs['pk'])
+        centre = centres_db.get_centre(centre_id)
         if not centre:
             return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Rooms live in their own DynamoDB table, not embedded on the centre item.
+        # Reconcile the incoming array against it instead of letting it get
+        # written straight onto the centre — that orphans it from the real
+        # Rooms table, so any rooms added here vanish on the next fetch.
+        if 'rooms' in request.data:
+            error = self._reconcile_rooms(centre_id, request.data.get('rooms') or [])
+            if error:
+                return error
+
         # Validate through serializer (partial=True for PATCH)
         serializer = self.get_serializer(instance=centre, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        updated = centres_db.update_centre(str(kwargs['pk']), serializer.validated_data)
+        validated = serializer.validated_data.copy()
+        validated.pop('rooms', None)
+        updated = centres_db.update_centre(centre_id, validated)
         if not updated:
             return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
+        updated['rooms'] = centres_db.get_rooms(centre_id)
         return Response(updated)
+
+    def _reconcile_rooms(self, centre_id, rooms_payload):
+        """Create/rename/delete rooms so the Rooms table matches rooms_payload.
+
+        Applies the same rules RoomViewSet enforces directly (name required,
+        <=50 chars, unique per centre, deletion blocked while a room still has
+        timetable slots) since this bypasses that viewset's per-room endpoints.
+        Returns a Response on validation failure, or None on success.
+        """
+        existing = {r['id']: r for r in centres_db.get_rooms(centre_id)}
+        incoming_ids = set()
+        seen_names = set()
+
+        for entry in rooms_payload:
+            name = (entry.get('name') or '').strip()
+            if not name:
+                return Response({'rooms': ['Room name is required.']}, status=status.HTTP_400_BAD_REQUEST)
+            if len(name) > 50:
+                return Response({'rooms': ['Room name must be 50 characters or less.']}, status=status.HTTP_400_BAD_REQUEST)
+            if name.lower() in seen_names:
+                return Response({'rooms': [f'Duplicate room name: {name}']}, status=status.HTTP_400_BAD_REQUEST)
+            seen_names.add(name.lower())
+
+            room_id = entry.get('id')
+            if room_id and room_id in existing:
+                incoming_ids.add(room_id)
+                if existing[room_id].get('name') != name:
+                    centres_db.update_room(room_id, {'name': name})
+            else:
+                created = centres_db.create_room(centre_id, {'name': name})
+                incoming_ids.add(created['id'])
+
+        for room_id, room in existing.items():
+            if room_id in incoming_ids:
+                continue
+            if sessions_db.list_slots_by_room(room_id):
+                return Response(
+                    {'rooms': [f'Cannot remove room "{room.get("name")}" because it is assigned to timetable entries.']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            centres_db.delete_room(room_id)
+
+        return None
 
     def destroy(self, request, *args, **kwargs):
         centre_id = str(kwargs['pk'])
