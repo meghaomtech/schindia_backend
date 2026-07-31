@@ -8,6 +8,11 @@ router.register(r'centres', views.CentreViewSet, basename='centre')
 urlpatterns = [
     path('', include(router.urls)),
     path(
+        'centres/<uuid:centre_pk>/sub-centres/',
+        views.CentreViewSet.as_view({'get': 'sub_centres'}),
+        name='centre-sub-centres'
+    ),
+    path(
         'centres/<uuid:centre_pk>/rooms/',
         views.RoomViewSet.as_view({'get': 'list', 'post': 'create'}),
         name='centre-rooms-list'

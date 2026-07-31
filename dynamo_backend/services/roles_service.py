@@ -4,6 +4,13 @@ import uuid
 from ..service import DynamoDBService
 from ..tables import ROLES_TABLE, ROLE_PERMISSIONS_TABLE, ROLE_MEMBERS_TABLE
 
+# Sentinel centre_id used for roles that sit outside any single centre
+# (Global Settings > Roles & Permissions). Reuses the existing Roles/
+# RolePermissions/RoleMembers tables and the centre_id-index GSI instead of
+# provisioning new DynamoDB tables — a global role is just a role whose
+# centre_id is this constant.
+GLOBAL_SCOPE = '__global__'
+
 
 class RolesDynamoService:
     def __init__(self):
@@ -93,6 +100,10 @@ class RolesDynamoService:
     # Members
     def list_members(self, role_id):
         return self.members.query_by_index('role_id-index', 'role_id', str(role_id))
+
+    def get_member(self, member_id):
+        """Get a single role-member record by its own id (not by user_id)."""
+        return self.members.get(str(member_id))
 
     def add_member(self, role_id, user_id, name='', email=''):
         """Add a user to a role. Stores name and email for display."""

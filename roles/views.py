@@ -1,4 +1,5 @@
 import logging
+import uuid
 
 from django.conf import settings
 from django.core.mail import send_mail
@@ -9,7 +10,15 @@ from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import roles_db, centres_db, auth_db
+from dynamo_backend.services.roles_service import GLOBAL_SCOPE
 from .permissions_catalog import PERMISSION_CATEGORIES
+from .global_roles import (
+    DEFAULT_KINDS,
+    KIND_AFFILIATE,
+    KIND_CENTRE_MANAGER,
+    ensure_default_global_roles,
+    get_global_role_by_kind,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +161,338 @@ class RoleViewSet(viewsets.ViewSet):
 
         roles_db.delete_role(str(kwargs['pk']))
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class GlobalRoleViewSet(viewsets.ViewSet):
+    """Roles & Permissions outside/above individual centres (Global Settings).
+
+    Same shape and rules as centre-level roles (RoleViewSet above), scoped to
+    the GLOBAL_SCOPE sentinel instead of a centre_pk. The 3 default roles
+    (Super Admin, Centre Manager, Affiliate) can be edited but not deleted —
+    Centre Creation's manager dropdown / affiliate multi-select depend on the
+    Centre Manager and Affiliate roles existing.
+    """
+    permission_classes = [IsAuthenticated, IsApprovedUser]
+
+    def list(self, request, *args, **kwargs):
+        roles = ensure_default_global_roles()
+        return Response(roles)
+
+    def retrieve(self, request, *args, **kwargs):
+        role = roles_db.get_role(str(kwargs['pk']))
+        if not role or role.get('centre_id') != GLOBAL_SCOPE:
+            return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(role)
+
+    def create(self, request, *args, **kwargs):
+        ensure_default_global_roles()
+        data = request.data.copy()
+        data.pop('centre', None)
+        data.pop('kind', None)
+        data['kind'] = 'custom'
+        data['is_default'] = False
+
+        name = data.get('name', '').strip()
+        if not name:
+            return Response({'name': ['Role name is required.']}, status=status.HTTP_400_BAD_REQUEST)
+        if len(name) > 50:
+            return Response(
+                {'name': ['Role name must be 50 characters or less.']},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        existing_roles = roles_db.list_roles(GLOBAL_SCOPE)
+        for r in existing_roles:
+            if r.get('name', '').lower() == name.lower():
+                return Response(
+                    {'name': ['A global role with this name already exists.']},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        data['name'] = name
+        role = roles_db.create_role(GLOBAL_SCOPE, data)
+        return Response(role, status=status.HTTP_201_CREATED)
+
+    def partial_update(self, request, *args, **kwargs):
+        role = roles_db.get_role(str(kwargs['pk']))
+        if not role or role.get('centre_id') != GLOBAL_SCOPE:
+            return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        data = request.data.copy()
+        # kind and default-ness are structural, not editable via this endpoint
+        data.pop('kind', None)
+        data.pop('is_default', None)
+
+        new_name = data.get('name', '').strip()
+        if new_name:
+            if len(new_name) > 50:
+                return Response(
+                    {'name': ['Role name must be 50 characters or less.']},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            existing_roles = roles_db.list_roles(GLOBAL_SCOPE)
+            for r in existing_roles:
+                if r.get('id') != str(kwargs['pk']) and r.get('name', '').lower() == new_name.lower():
+                    return Response(
+                        {'name': ['A global role with this name already exists.']},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            data['name'] = new_name
+
+        updated = roles_db.update_role(str(kwargs['pk']), data)
+        return Response(updated)
+
+    def destroy(self, request, *args, **kwargs):
+        role = roles_db.get_role(str(kwargs['pk']))
+        if not role or role.get('centre_id') != GLOBAL_SCOPE:
+            return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if role.get('is_default') or role.get('kind') in DEFAULT_KINDS:
+            return Response(
+                {'detail': 'This is a default global role and cannot be deleted.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if role.get('members'):
+            return Response(
+                {'detail': 'Cannot delete this role because it has active members. '
+                           'Please reassign them first.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        roles_db.delete_role(str(kwargs['pk']))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def global_roles_directory(request):
+    """
+    Flat lists of Centre Manager and Affiliate accounts, for Centre
+    Creation's "Centre Manager" dropdown and "Assign Affiliates" multi-select.
+    """
+    manager_role = get_global_role_by_kind(KIND_CENTRE_MANAGER)
+    affiliate_role = get_global_role_by_kind(KIND_AFFILIATE)
+
+    def summarize(role):
+        if not role:
+            return []
+        return [
+            {'id': m['id'], 'name': m.get('name', ''), 'email': m.get('email', '')}
+            for m in role.get('members', [])
+        ]
+
+    return Response({
+        'centre_managers': summarize(manager_role),
+        'affiliates': summarize(affiliate_role),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def global_people(request):
+    """Same as centre_people, but for global roles (People tab, Req 14 parity)."""
+    roles = ensure_default_global_roles()
+
+    people = []
+    seen_users = set()
+    for role in roles:
+        for member in role.get('members', []):
+            user_id = member.get('user_id')
+            if not user_id:
+                continue
+            if user_id in seen_users:
+                for person in people:
+                    if person['id'] == user_id:
+                        if role.get('name', '') not in person['roles']:
+                            person['roles'].append(role.get('name', ''))
+                        break
+                continue
+            seen_users.add(user_id)
+            people.append({
+                'id': user_id,
+                'name': member.get('name', ''),
+                'email': member.get('email', ''),
+                'role': role.get('name', ''),
+                'roles': [role.get('name', '')],
+                'role_id': role.get('id', ''),
+            })
+
+    role_counts = {role.get('name', ''): len(role.get('members', [])) for role in roles}
+    return Response({'total': len(people), 'role_counts': role_counts, 'people': people})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def global_permissions_matrix(request):
+    """Permissions matrix for global roles (Req 16 parity)."""
+    roles = ensure_default_global_roles()
+
+    matrix = {}
+    for module_name, entries in PERMISSION_CATEGORIES.items():
+        matrix[module_name] = []
+        for key, label in entries:
+            row = {'key': key, 'label': label, 'roles': {}}
+            for role in roles:
+                perm = next((p for p in role.get('permissions', []) if p.get('key') == key), None)
+                row['roles'][role['id']] = {
+                    'visible': perm.get('visible', False) if perm else False,
+                    'edit': perm.get('edit', False) if perm else False,
+                }
+            matrix[module_name].append(row)
+
+    roles_data = [{
+        'id': r['id'],
+        'name': r.get('name', ''),
+        'kind': r.get('kind', 'custom'),
+        'is_default': bool(r.get('is_default')),
+        'data_scope': r.get('data_scope', 'all'),
+        'member_count': len(r.get('members', [])),
+    } for r in roles]
+
+    return Response({'roles': roles_data, 'matrix': matrix})
+
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def save_global_permissions_matrix(request):
+    """Bulk update permissions for all global roles."""
+    data = request.data
+    roles = ensure_default_global_roles()
+    valid_ids = {r['id'] for r in roles}
+
+    skipped = []
+    for role_id, perms in data.items():
+        if role_id not in valid_ids:
+            skipped.append(role_id)
+            continue
+        for key, flags in perms.items():
+            roles_db.update_permission(str(role_id), key, flags)
+
+    resp = {'detail': 'Permissions saved successfully.'}
+    if skipped:
+        resp['skipped_role_ids'] = skipped
+    return Response(resp)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def update_global_permission(request, role_pk, key):
+    """Update a specific permission's flags for a global role."""
+    role = roles_db.get_role(str(role_pk))
+    if not role or role.get('centre_id') != GLOBAL_SCOPE:
+        return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+    result = roles_db.update_permission(str(role_pk), key, request.data)
+    return Response(result)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def add_global_member(request, role_pk):
+    """
+    Add a person to a global role. Unlike centre-role members (picked from an
+    existing account), this is where Centre Manager / Affiliate accounts are
+    created in the first place — name + email are enough, an id is minted
+    for them.
+    """
+    role = roles_db.get_role(str(role_pk))
+    if not role or role.get('centre_id') != GLOBAL_SCOPE:
+        return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    name = (request.data.get('name') or '').strip()
+    email = (request.data.get('email') or '').strip()
+
+    if not name:
+        return Response({'name': ['Name is required.']}, status=status.HTTP_400_BAD_REQUEST)
+    if not email:
+        return Response({'email': ['Email is required.']}, status=status.HTTP_400_BAD_REQUEST)
+
+    existing = roles_db.list_members(role_pk)
+    if any(m.get('email', '').lower() == email.lower() for m in existing):
+        return Response(
+            {'detail': 'This person already exists in this role.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    user_id = request.data.get('user') or request.data.get('user_id') or str(uuid.uuid4())
+    result = roles_db.add_member(str(role_pk), str(user_id), name=name, email=email)
+    if result is None:
+        return Response(
+            {'detail': 'This person already exists in this role.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    _send_onboarding_email(
+        email=email,
+        name=name,
+        centre_name='',
+        role_name=role.get('name', ''),
+    )
+
+    return Response(result, status=status.HTTP_201_CREATED)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def remove_global_member(request, role_pk, user_pk):
+    """
+    Remove a person from a global role. If they were the Centre Manager on
+    any centre, or an assigned Affiliate, cascade the removal there too
+    rather than leaving a dangling reference.
+    """
+    role = roles_db.get_role(str(role_pk))
+    if not role or role.get('centre_id') != GLOBAL_SCOPE:
+        return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    members = role.get('members', [])
+    member = next(
+        (m for m in members if m.get('user_id') == str(user_pk) or m.get('id') == str(user_pk)),
+        None
+    )
+    if not member:
+        return Response({'detail': 'Member not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    result = roles_db.remove_member(str(role_pk), str(user_pk))
+    if not result:
+        return Response({'detail': 'Member not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    member_id = member.get('id')
+    kind = role.get('kind')
+    if kind == KIND_CENTRE_MANAGER:
+        centres_db.clear_manager(member_id)
+    elif kind == KIND_AFFILIATE:
+        centres_db.remove_affiliate_everywhere(member_id)
+
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def resend_global_invite(request, role_pk, user_pk):
+    """Resend onboarding email to a global role member."""
+    role = roles_db.get_role(str(role_pk))
+    if not role or role.get('centre_id') != GLOBAL_SCOPE:
+        return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    member = next(
+        (m for m in role.get('members', []) if m.get('user_id') == str(user_pk)),
+        None
+    )
+    if not member:
+        return Response({'detail': 'Member not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    success = _send_onboarding_email(
+        email=member.get('email', ''),
+        name=member.get('name', ''),
+        centre_name='',
+        role_name=role.get('name', ''),
+    )
+    if success:
+        return Response({'detail': 'Onboarding email sent successfully.'})
+    return Response(
+        {'detail': 'Failed to send onboarding email.'},
+        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
 
 
 @api_view(['GET'])

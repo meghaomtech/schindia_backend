@@ -234,6 +234,84 @@ class CentreCreateTests(CentresAPITestCase):
         mock_centres_db.get_centre.assert_called_once_with(CENTRE_ID)
         self.assertEqual(resp.data["rooms"], [{"name": "Room 1"}])
 
+    def test_create_rejects_manager_id_not_a_centre_manager_member(self, mock_centres_db, mock_roles_db):
+        mock_roles_db.get_member.return_value = None
+        payload = {**VALID_CENTRE_PAYLOAD, "managerId": "not-a-real-member"}
+
+        resp = self.client.post('/api/v1/centres/', payload, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("manager_id", resp.data)
+        mock_centres_db.create_centre.assert_not_called()
+
+    def test_create_rejects_affiliate_id_from_wrong_global_role(self, mock_centres_db, mock_roles_db):
+        # Member exists, but belongs to the Centre Manager role, not Affiliate
+        mock_roles_db.get_member.return_value = {"id": "member-1", "role_id": "role-cm"}
+        mock_roles_db.get_role.return_value = {"id": "role-cm", "centre_id": "__global__", "kind": "centre_manager"}
+        payload = {**VALID_CENTRE_PAYLOAD, "affiliateIds": ["member-1"]}
+
+        resp = self.client.post('/api/v1/centres/', payload, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("affiliate_ids", resp.data)
+        mock_centres_db.create_centre.assert_not_called()
+
+    def test_create_accepts_valid_manager_and_affiliates(self, mock_centres_db, mock_roles_db):
+        def get_member(member_id):
+            return {"id": member_id, "role_id": f"role-for-{member_id}"}
+
+        def get_role(role_id):
+            if role_id == "role-for-manager-1":
+                return {"id": role_id, "centre_id": "__global__", "kind": "centre_manager"}
+            return {"id": role_id, "centre_id": "__global__", "kind": "affiliate"}
+
+        mock_roles_db.get_member.side_effect = get_member
+        mock_roles_db.get_role.side_effect = get_role
+        mock_centres_db.create_centre.return_value = {"id": CENTRE_ID}
+        mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "rooms": []}
+        mock_roles_db.create_role.return_value = {"id": "role-1"}
+        payload = {**VALID_CENTRE_PAYLOAD, "managerId": "manager-1", "affiliateIds": ["aff-1", "aff-2"]}
+
+        resp = self.client.post('/api/v1/centres/', payload, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        created_data = mock_centres_db.create_centre.call_args[0][0]
+        self.assertEqual(created_data["manager_id"], "manager-1")
+        self.assertEqual(created_data["affiliate_ids"], ["aff-1", "aff-2"])
+
+    def test_create_rejects_nonexistent_parent_centre(self, mock_centres_db, mock_roles_db):
+        mock_centres_db.get_centre.return_value = None
+        payload = {**VALID_CENTRE_PAYLOAD, "parentCentreId": "does-not-exist"}
+
+        resp = self.client.post('/api/v1/centres/', payload, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("parent_centre_id", resp.data)
+        mock_centres_db.create_centre.assert_not_called()
+
+    def test_create_rejects_parent_that_is_itself_a_sub_centre(self, mock_centres_db, mock_roles_db):
+        mock_centres_db.get_centre.return_value = {"id": "parent-1", "parent_centre_id": "grandparent-1"}
+        payload = {**VALID_CENTRE_PAYLOAD, "parentCentreId": "parent-1"}
+
+        resp = self.client.post('/api/v1/centres/', payload, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("parent_centre_id", resp.data)
+        self.assertIn("one level", resp.data["parent_centre_id"][0])
+        mock_centres_db.create_centre.assert_not_called()
+
+    def test_create_sub_centre_success(self, mock_centres_db, mock_roles_db):
+        mock_centres_db.get_centre.return_value = {"id": "parent-1", "parent_centre_id": None}
+        mock_centres_db.create_centre.return_value = {"id": CENTRE_ID}
+        mock_roles_db.create_role.return_value = {"id": "role-1"}
+        payload = {**VALID_CENTRE_PAYLOAD, "parentCentreId": "parent-1"}
+
+        resp = self.client.post('/api/v1/centres/', payload, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        created_data = mock_centres_db.create_centre.call_args[0][0]
+        self.assertEqual(created_data["parent_centre_id"], "parent-1")
+
 
 # =============================================================================
 # CentreViewSet: partial_update
@@ -278,6 +356,30 @@ class CentreUpdateTests(CentresAPITestCase):
 
 
 # =============================================================================
+# CentreViewSet: sub-centres
+# =============================================================================
+
+@patch('centres.views.centres_db')
+class CentreSubCentresTests(CentresAPITestCase):
+    def test_sub_centres_not_found(self, mock_centres_db):
+        mock_centres_db.get_centre.return_value = None
+
+        resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/sub-centres/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_sub_centres_lists_children(self, mock_centres_db):
+        mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "name": "Parent"}
+        mock_centres_db.list_sub_centres.return_value = [{"id": "sub-1", "name": "Sub 1"}]
+
+        resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/sub-centres/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data, [{"id": "sub-1", "name": "Sub 1"}])
+        mock_centres_db.list_sub_centres.assert_called_once_with(CENTRE_ID)
+
+
+# =============================================================================
 # CentreViewSet: destroy
 # =============================================================================
 
@@ -295,6 +397,7 @@ class CentreDestroyTests(CentresAPITestCase):
 
     def test_destroy_blocked_by_existing_sessions(self, mock_centres_db, mock_sessions_db, mock_children_db, mock_roles_db):
         mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "rooms": []}
+        mock_centres_db.list_sub_centres.return_value = []
         mock_sessions_db.list_sessions.return_value = [{"id": "session-1"}]
 
         resp = self.client.delete(f'/api/v1/centres/{CENTRE_ID}/')
@@ -305,6 +408,7 @@ class CentreDestroyTests(CentresAPITestCase):
 
     def test_destroy_blocked_by_enrolled_children(self, mock_centres_db, mock_sessions_db, mock_children_db, mock_roles_db):
         mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "rooms": []}
+        mock_centres_db.list_sub_centres.return_value = []
         mock_sessions_db.list_sessions.return_value = []
         mock_children_db.list_children.return_value = [{"id": "child-1"}]
 
@@ -316,6 +420,7 @@ class CentreDestroyTests(CentresAPITestCase):
 
     def test_destroy_blocked_by_active_role_members(self, mock_centres_db, mock_sessions_db, mock_children_db, mock_roles_db):
         mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "rooms": []}
+        mock_centres_db.list_sub_centres.return_value = []
         mock_sessions_db.list_sessions.return_value = []
         mock_children_db.list_children.return_value = []
         mock_roles_db.list_roles.return_value = [{"id": "role-1", "members": [{"id": "member-1"}]}]
@@ -330,6 +435,7 @@ class CentreDestroyTests(CentresAPITestCase):
         mock_centres_db.get_centre.return_value = {
             "id": CENTRE_ID, "rooms": [{"id": "room-1"}, {"id": "room-2"}],
         }
+        mock_centres_db.list_sub_centres.return_value = []
         mock_sessions_db.list_sessions.return_value = []
         mock_children_db.list_children.return_value = []
         mock_roles_db.list_roles.return_value = [{"id": "role-1", "members": []}]
@@ -341,6 +447,16 @@ class CentreDestroyTests(CentresAPITestCase):
         mock_centres_db.delete_room.assert_any_call("room-2")
         mock_roles_db.delete_role.assert_called_once_with("role-1")
         mock_centres_db.delete_centre.assert_called_once_with(CENTRE_ID)
+
+    def test_destroy_blocked_by_sub_centres(self, mock_centres_db, mock_sessions_db, mock_children_db, mock_roles_db):
+        mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "rooms": []}
+        mock_centres_db.list_sub_centres.return_value = [{"id": "sub-1", "parent_centre_id": CENTRE_ID}]
+
+        resp = self.client.delete(f'/api/v1/centres/{CENTRE_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("sub-centres", resp.data["detail"])
+        mock_centres_db.delete_centre.assert_not_called()
 
 
 # =============================================================================

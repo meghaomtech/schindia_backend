@@ -4,7 +4,9 @@ from rest_framework.permissions import IsAuthenticated
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import centres_db, sessions_db, children_db, roles_db
+from dynamo_backend.services.roles_service import GLOBAL_SCOPE
 from roles.permissions_catalog import ALL_PERMISSION_KEYS
+from roles.global_roles import KIND_CENTRE_MANAGER, KIND_AFFILIATE
 from .serializers import CentreCreateSerializer, RoomSerializer
 
 
@@ -30,6 +32,12 @@ class CentreViewSet(viewsets.ViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data.copy()
+
+        errors = {}
+        errors.update(self._validate_manager_and_affiliates(data))
+        errors.update(self._validate_parent_centre(data.get('parent_centre_id')))
+        if errors:
+            return Response(errors, status=status.HTTP_400_BAD_REQUEST)
 
         # Pop rooms — create them separately
         rooms_data = data.pop('rooms', [])
@@ -83,11 +91,93 @@ class CentreViewSet(viewsets.ViewSet):
         serializer.is_valid(raise_exception=True)
         validated = serializer.validated_data.copy()
         validated.pop('rooms', None)
+
+        errors = {}
+        if 'manager_id' in validated or 'affiliate_ids' in validated:
+            errors.update(self._validate_manager_and_affiliates(validated, partial=True))
+        if 'parent_centre_id' in validated:
+            errors.update(self._validate_parent_centre(validated.get('parent_centre_id'), self_id=centre_id))
+        if errors:
+            return Response(errors, status=status.HTTP_400_BAD_REQUEST)
+
         updated = centres_db.update_centre(centre_id, validated)
         if not updated:
             return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
         updated['rooms'] = centres_db.get_rooms(centre_id)
         return Response(updated)
+
+    def _global_member_kind(self, member_id):
+        """Resolve a Global Role member id to that role's kind, or None if it
+        doesn't reference a real global-role member."""
+        if not member_id:
+            return None
+        member = roles_db.get_member(member_id)
+        if not member:
+            return None
+        role = roles_db.get_role(member.get('role_id'))
+        if not role or role.get('centre_id') != GLOBAL_SCOPE:
+            return None
+        return role.get('kind')
+
+    def _validate_manager_and_affiliates(self, data, partial=False):
+        """Ensure manager_id/affiliate_ids reference real members of the
+        global Centre Manager / Affiliate roles (Global Settings)."""
+        errors = {}
+
+        if not partial or 'manager_id' in data:
+            manager_id = data.get('manager_id')
+            if manager_id and self._global_member_kind(manager_id) != KIND_CENTRE_MANAGER:
+                errors['manager_id'] = [
+                    'Selected centre manager was not found. Add them under '
+                    'Global Settings > Roles & Permissions > Centre Manager first.'
+                ]
+
+        if not partial or 'affiliate_ids' in data:
+            affiliate_ids = data.get('affiliate_ids') or []
+            bad = [aid for aid in affiliate_ids if self._global_member_kind(aid) != KIND_AFFILIATE]
+            if bad:
+                errors['affiliate_ids'] = [
+                    'One or more selected affiliates were not found. Add them under '
+                    'Global Settings > Roles & Permissions > Affiliate first.'
+                ]
+
+        return errors
+
+    def _validate_parent_centre(self, parent_centre_id, self_id=None):
+        """Enforce one level of centre nesting: a sub-centre cannot itself
+        have sub-centres, in either direction."""
+        if not parent_centre_id:
+            return {}
+
+        if self_id and str(parent_centre_id) == str(self_id):
+            return {'parent_centre_id': ['A centre cannot be its own parent.']}
+
+        parent = centres_db.get_centre(parent_centre_id)
+        if not parent:
+            return {'parent_centre_id': ['Parent centre not found.']}
+        if parent.get('parent_centre_id'):
+            return {
+                'parent_centre_id': [
+                    'A sub-centre cannot itself be set as a parent centre '
+                    '(only one level of nesting is supported).'
+                ]
+            }
+
+        if self_id and centres_db.list_sub_centres(self_id, enrich=False):
+            return {
+                'parent_centre_id': [
+                    'This centre already has sub-centres and cannot itself become a sub-centre.'
+                ]
+            }
+
+        return {}
+
+    def sub_centres(self, request, *args, **kwargs):
+        centre_id = str(kwargs['centre_pk'])
+        centre = centres_db.get_centre(centre_id)
+        if not centre:
+            return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(centres_db.list_sub_centres(centre_id))
 
     def _reconcile_rooms(self, centre_id, rooms_payload):
         """Create/rename/delete rooms so the Rooms table matches rooms_payload.
@@ -140,6 +230,12 @@ class CentreViewSet(viewsets.ViewSet):
             return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         # Block deletion if centre has dependent data
+        if centres_db.list_sub_centres(centre_id, enrich=False):
+            return Response(
+                {'detail': 'Cannot delete centre with sub-centres. Remove or reassign sub-centres first.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         sessions = sessions_db.list_sessions(centre_id)
         if sessions:
             return Response(

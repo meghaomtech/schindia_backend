@@ -90,7 +90,11 @@ class CentreCreateSerializer(serializers.Serializer):
     vat_number = serializers.CharField(max_length=50, required=False, allow_blank=True)
     phone = serializers.CharField(max_length=15)
     email = serializers.EmailField()
-    manager_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    manager_id = serializers.CharField(required=False, allow_null=True, allow_blank=True, default=None)
+    affiliate_ids = serializers.ListField(
+        child=serializers.CharField(), required=False, default=list
+    )
+    parent_centre_id = serializers.CharField(required=False, allow_null=True, allow_blank=True, default=None)
     max_capacity = serializers.IntegerField(required=False, default=500)
     is_archived = serializers.BooleanField(required=False, default=False)
     rooms = RoomSerializer(many=True, required=False)
@@ -141,6 +145,25 @@ class CentreCreateSerializer(serializers.Serializer):
         if not value:
             raise serializers.ValidationError('Email address is required.')
         return value
+
+    def validate_manager_id(self, value):
+        return value or None
+
+    def validate_parent_centre_id(self, value):
+        return value or None
+
+    def validate_affiliate_ids(self, value):
+        if not value:
+            return []
+        # De-duplicate while preserving order; drop blanks.
+        seen = set()
+        cleaned = []
+        for item in value:
+            item = (item or '').strip()
+            if item and item not in seen:
+                seen.add(item)
+                cleaned.append(item)
+        return cleaned
 
     def validate_closure_dates(self, value):
         if not value:

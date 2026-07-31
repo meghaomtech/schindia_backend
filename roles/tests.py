@@ -637,3 +637,281 @@ class RemoveMemberTests(RolesAPITestCase):
         resp = self.client.delete(f'/api/v1/roles/{ROLE_ID}/members/{USER_ID}/')
 
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+
+# =============================================================================
+# Global Roles & Permissions (outside/above individual centres)
+# =============================================================================
+
+from dynamo_backend.services.roles_service import GLOBAL_SCOPE  # noqa: E402
+
+SUPER_ADMIN_ROLE_ID = "88888888-8888-8888-8888-888888888888"
+CENTRE_MANAGER_ROLE_ID = "99999999-9999-9999-9999-999999999999"
+AFFILIATE_ROLE_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+CUSTOM_ROLE_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+
+def default_global_roles(**member_overrides):
+    return [
+        {
+            "id": SUPER_ADMIN_ROLE_ID, "centre_id": GLOBAL_SCOPE, "name": "Super Admin",
+            "kind": "super_admin", "is_default": True,
+            "members": member_overrides.get("super_admin", []), "permissions": [],
+        },
+        {
+            "id": CENTRE_MANAGER_ROLE_ID, "centre_id": GLOBAL_SCOPE, "name": "Centre Manager",
+            "kind": "centre_manager", "is_default": True,
+            "members": member_overrides.get("centre_manager", []), "permissions": [],
+        },
+        {
+            "id": AFFILIATE_ROLE_ID, "centre_id": GLOBAL_SCOPE, "name": "Affiliate",
+            "kind": "affiliate", "is_default": True,
+            "members": member_overrides.get("affiliate", []), "permissions": [],
+        },
+    ]
+
+
+class GlobalRolesAPITestCase(SimpleTestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = FakeUser()
+        self.client.force_authenticate(user=self.user)
+
+
+class GlobalRolesPermissionsTests(SimpleTestCase):
+    ENDPOINTS = [
+        ("get", "/api/v1/global-roles/"),
+        ("get", f"/api/v1/global-roles/{CUSTOM_ROLE_ID}/"),
+        ("post", "/api/v1/global-roles/"),
+        ("get", "/api/v1/global-roles/directory/"),
+        ("get", "/api/v1/global-roles/people/"),
+        ("get", "/api/v1/global-roles/permissions-matrix/"),
+    ]
+
+    def test_unauthenticated_requests_are_rejected(self):
+        client = APIClient()
+        for method, url in self.ENDPOINTS:
+            with self.subTest(method=method, url=url):
+                resp = getattr(client, method)(url)
+                self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_unapproved_user_requests_are_forbidden(self):
+        client = APIClient()
+        client.force_authenticate(user=FakeUser(status="pending"))
+        for method, url in self.ENDPOINTS:
+            with self.subTest(method=method, url=url):
+                resp = getattr(client, method)(url)
+                self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+
+@patch('roles.global_roles.roles_db')
+class GlobalRoleListTests(GlobalRolesAPITestCase):
+    def test_list_seeds_defaults_when_missing(self, mock_roles_db):
+        # First call (existence check) finds nothing; ensure_default_global_roles
+        # creates the 3 defaults, then re-lists them.
+        mock_roles_db.list_roles.side_effect = [[], default_global_roles()]
+
+        resp = self.client.get('/api/v1/global-roles/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(mock_roles_db.create_role.call_count, 3)
+        created_names = {c.args[1]['name'] for c in mock_roles_db.create_role.call_args_list}
+        self.assertEqual(created_names, {"Super Admin", "Centre Manager", "Affiliate"})
+        self.assertEqual(len(resp.data), 3)
+
+    def test_list_is_a_noop_when_defaults_already_exist(self, mock_roles_db):
+        mock_roles_db.list_roles.return_value = default_global_roles()
+
+        resp = self.client.get('/api/v1/global-roles/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_roles_db.create_role.assert_not_called()
+        self.assertEqual(len(resp.data), 3)
+
+
+@patch('roles.views.roles_db')
+@patch('roles.global_roles.roles_db')
+class GlobalRoleCreateTests(GlobalRolesAPITestCase):
+    def test_create_missing_name(self, mock_global_roles_db, mock_views_roles_db):
+        mock_global_roles_db.list_roles.return_value = default_global_roles()
+
+        resp = self.client.post('/api/v1/global-roles/', {"name": "  "}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_views_roles_db.create_role.assert_not_called()
+
+    def test_create_duplicate_name_rejected(self, mock_global_roles_db, mock_views_roles_db):
+        mock_global_roles_db.list_roles.return_value = default_global_roles()
+        mock_views_roles_db.list_roles.return_value = default_global_roles()
+
+        resp = self.client.post('/api/v1/global-roles/', {"name": "affiliate"}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already exists", resp.data["name"][0])
+        mock_views_roles_db.create_role.assert_not_called()
+
+    def test_create_custom_role_forces_kind_and_not_default(self, mock_global_roles_db, mock_views_roles_db):
+        mock_global_roles_db.list_roles.return_value = default_global_roles()
+        mock_views_roles_db.list_roles.return_value = default_global_roles()
+        mock_views_roles_db.create_role.return_value = {"id": CUSTOM_ROLE_ID, "name": "Regional Lead"}
+
+        resp = self.client.post(
+            '/api/v1/global-roles/',
+            {"name": "Regional Lead", "kind": "super_admin", "is_default": True},
+            format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        sent_scope, sent_data = mock_views_roles_db.create_role.call_args[0]
+        self.assertEqual(sent_scope, GLOBAL_SCOPE)
+        self.assertEqual(sent_data["kind"], "custom")
+        self.assertFalse(sent_data["is_default"])
+
+
+@patch('roles.views.roles_db')
+class GlobalRoleDestroyTests(GlobalRolesAPITestCase):
+    def test_destroy_not_found(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = None
+
+        resp = self.client.delete(f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_destroy_scope_mismatch_is_404(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = {"id": CUSTOM_ROLE_ID, "centre_id": CENTRE_ID}
+
+        resp = self.client.delete(f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_destroy_default_role_is_blocked(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = default_global_roles()[1]  # Centre Manager
+
+        resp = self.client.delete(f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("default global role", resp.data["detail"])
+        mock_roles_db.delete_role.assert_not_called()
+
+    def test_destroy_blocked_by_active_members(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = {
+            "id": CUSTOM_ROLE_ID, "centre_id": GLOBAL_SCOPE, "kind": "custom",
+            "is_default": False, "members": [{"user_id": USER_ID}],
+        }
+
+        resp = self.client.delete(f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("active members", resp.data["detail"])
+        mock_roles_db.delete_role.assert_not_called()
+
+    def test_destroy_custom_role_success(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = {
+            "id": CUSTOM_ROLE_ID, "centre_id": GLOBAL_SCOPE, "kind": "custom",
+            "is_default": False, "members": [],
+        }
+
+        resp = self.client.delete(f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        mock_roles_db.delete_role.assert_called_once_with(CUSTOM_ROLE_ID)
+
+
+@patch('roles.global_roles.roles_db')
+class GlobalRolesDirectoryTests(GlobalRolesAPITestCase):
+    def test_directory_lists_managers_and_affiliates(self, mock_roles_db):
+        mock_roles_db.list_roles.return_value = default_global_roles(
+            centre_manager=[{"id": "member-1", "name": "Priya", "email": "priya@example.com"}],
+            affiliate=[{"id": "member-2", "name": "Rahul", "email": "rahul@example.com"}],
+        )
+
+        resp = self.client.get('/api/v1/global-roles/directory/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["centre_managers"], [{"id": "member-1", "name": "Priya", "email": "priya@example.com"}])
+        self.assertEqual(resp.data["affiliates"], [{"id": "member-2", "name": "Rahul", "email": "rahul@example.com"}])
+
+
+@patch('roles.views.send_mail')
+@patch('roles.views.roles_db')
+class AddGlobalMemberTests(GlobalRolesAPITestCase):
+    def test_role_not_found(self, mock_roles_db, mock_send_mail):
+        mock_roles_db.get_role.return_value = None
+
+        resp = self.client.post(f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/members/', {"name": "A", "email": "a@x.com"}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_requires_name_and_email(self, mock_roles_db, mock_send_mail):
+        mock_roles_db.get_role.return_value = default_global_roles()[1]
+
+        resp = self.client.post(f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/members/', {}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_roles_db.add_member.assert_not_called()
+
+    def test_duplicate_email_rejected(self, mock_roles_db, mock_send_mail):
+        mock_roles_db.get_role.return_value = default_global_roles()[1]
+        mock_roles_db.list_members.return_value = [{"email": "priya@example.com"}]
+
+        resp = self.client.post(
+            f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/members/',
+            {"name": "Priya Again", "email": "PRIYA@example.com"}, format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_roles_db.add_member.assert_not_called()
+
+    def test_add_success_creates_account_and_sends_invite(self, mock_roles_db, mock_send_mail):
+        mock_roles_db.get_role.return_value = default_global_roles()[1]
+        mock_roles_db.list_members.return_value = []
+        mock_roles_db.add_member.return_value = {"id": "member-1", "name": "Priya", "email": "priya@example.com"}
+
+        resp = self.client.post(
+            f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/members/',
+            {"name": "Priya", "email": "priya@example.com"}, format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        mock_roles_db.add_member.assert_called_once()
+        mock_send_mail.assert_called_once()
+
+
+@patch('roles.views.centres_db')
+@patch('roles.views.roles_db')
+class RemoveGlobalMemberTests(GlobalRolesAPITestCase):
+    def test_role_not_found(self, mock_roles_db, mock_centres_db):
+        mock_roles_db.get_role.return_value = None
+
+        resp = self.client.delete(f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/members/{USER_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_member_not_found(self, mock_roles_db, mock_centres_db):
+        mock_roles_db.get_role.return_value = default_global_roles()[1]
+
+        resp = self.client.delete(f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/members/{USER_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_removing_centre_manager_cascades_to_centres(self, mock_roles_db, mock_centres_db):
+        role = default_global_roles(centre_manager=[{"id": "member-1", "user_id": USER_ID}])[1]
+        mock_roles_db.get_role.return_value = role
+        mock_roles_db.remove_member.return_value = True
+
+        resp = self.client.delete(f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/members/{USER_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        mock_centres_db.clear_manager.assert_called_once_with("member-1")
+        mock_centres_db.remove_affiliate_everywhere.assert_not_called()
+
+    def test_removing_affiliate_cascades_to_centres(self, mock_roles_db, mock_centres_db):
+        role = default_global_roles(affiliate=[{"id": "member-2", "user_id": USER_ID}])[2]
+        mock_roles_db.get_role.return_value = role
+        mock_roles_db.remove_member.return_value = True
+
+        resp = self.client.delete(f'/api/v1/global-roles/{AFFILIATE_ROLE_ID}/members/{USER_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        mock_centres_db.remove_affiliate_everywhere.assert_called_once_with("member-2")
+        mock_centres_db.clear_manager.assert_not_called()
