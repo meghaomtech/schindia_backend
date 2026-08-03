@@ -915,3 +915,277 @@ class RemoveGlobalMemberTests(GlobalRolesAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
         mock_centres_db.remove_affiliate_everywhere.assert_called_once_with("member-2")
         mock_centres_db.clear_manager.assert_not_called()
+
+
+# =============================================================================
+# GlobalRoleViewSet: retrieve
+# =============================================================================
+
+@patch('roles.views.roles_db')
+class GlobalRoleRetrieveTests(GlobalRolesAPITestCase):
+    def test_retrieve_not_found(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = None
+
+        resp = self.client.get(f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_retrieve_scope_mismatch_is_404(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = {"id": CUSTOM_ROLE_ID, "centre_id": CENTRE_ID}
+
+        resp = self.client.get(f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_retrieve_found(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = default_global_roles()[1]
+
+        resp = self.client.get(f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["name"], "Centre Manager")
+
+
+# =============================================================================
+# GlobalRoleViewSet: partial_update
+# =============================================================================
+
+@patch('roles.views.roles_db')
+class GlobalRoleUpdateTests(GlobalRolesAPITestCase):
+    def test_update_not_found(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = None
+
+        resp = self.client.patch(f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/', {"name": "New"}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_update_scope_mismatch_is_404(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = {"id": CUSTOM_ROLE_ID, "centre_id": CENTRE_ID}
+
+        resp = self.client.patch(f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/', {"name": "New"}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        mock_roles_db.update_role.assert_not_called()
+
+    def test_rename_too_long(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = {"id": CUSTOM_ROLE_ID, "centre_id": GLOBAL_SCOPE, "name": "Regional Lead"}
+
+        resp = self.client.patch(f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/', {"name": "x" * 51}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_roles_db.update_role.assert_not_called()
+
+    def test_rename_duplicate(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = {"id": CUSTOM_ROLE_ID, "centre_id": GLOBAL_SCOPE, "name": "Regional Lead"}
+        mock_roles_db.list_roles.return_value = default_global_roles()
+
+        resp = self.client.patch(f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/', {"name": "affiliate"}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_roles_db.update_role.assert_not_called()
+
+    def test_update_strips_kind_and_is_default(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = {"id": CUSTOM_ROLE_ID, "centre_id": GLOBAL_SCOPE, "name": "Regional Lead"}
+        mock_roles_db.update_role.return_value = {"id": CUSTOM_ROLE_ID, "name": "Regional Lead"}
+
+        resp = self.client.patch(
+            f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/',
+            {"kind": "super_admin", "is_default": True, "description": "Updated"},
+            format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        sent_data = mock_roles_db.update_role.call_args[0][1]
+        self.assertNotIn("kind", sent_data)
+        self.assertNotIn("is_default", sent_data)
+
+    def test_update_success_with_rename(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = {"id": CUSTOM_ROLE_ID, "centre_id": GLOBAL_SCOPE, "name": "Regional Lead"}
+        mock_roles_db.list_roles.return_value = default_global_roles()
+        mock_roles_db.update_role.return_value = {"id": CUSTOM_ROLE_ID, "name": "Regional Head"}
+
+        resp = self.client.patch(f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/', {"name": "Regional Head"}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_roles_db.update_role.assert_called_once_with(CUSTOM_ROLE_ID, {"name": "Regional Head"})
+
+
+# =============================================================================
+# global_people
+# =============================================================================
+
+@patch('roles.global_roles.roles_db')
+class GlobalPeopleTests(GlobalRolesAPITestCase):
+    def test_empty_when_no_members(self, mock_roles_db):
+        mock_roles_db.list_roles.return_value = default_global_roles()
+
+        resp = self.client.get('/api/v1/global-roles/people/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["total"], 0)
+        self.assertEqual(resp.data["people"], [])
+
+    def test_flattens_members_across_global_roles(self, mock_roles_db):
+        mock_roles_db.list_roles.return_value = default_global_roles(
+            centre_manager=[{"user_id": USER_ID, "name": "Priya", "email": "priya@example.com"}],
+            affiliate=[{"user_id": OTHER_USER_ID, "name": "Rahul", "email": "rahul@example.com"}],
+        )
+
+        resp = self.client.get('/api/v1/global-roles/people/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["total"], 2)
+        self.assertEqual(resp.data["role_counts"]["Centre Manager"], 1)
+        self.assertEqual(resp.data["role_counts"]["Affiliate"], 1)
+
+    def test_user_in_multiple_global_roles_is_deduped_with_combined_roles_list(self, mock_roles_db):
+        mock_roles_db.list_roles.return_value = default_global_roles(
+            centre_manager=[{"user_id": USER_ID, "name": "Priya", "email": "p@x.com"}],
+            affiliate=[{"user_id": USER_ID, "name": "Priya", "email": "p@x.com"}],
+        )
+
+        resp = self.client.get('/api/v1/global-roles/people/')
+
+        self.assertEqual(resp.data["total"], 1)
+        self.assertEqual(sorted(resp.data["people"][0]["roles"]), ["Affiliate", "Centre Manager"])
+
+
+# =============================================================================
+# global_permissions_matrix
+# =============================================================================
+
+@patch('roles.global_roles.roles_db')
+class GlobalPermissionsMatrixTests(GlobalRolesAPITestCase):
+    def test_builds_matrix_with_role_flags(self, mock_roles_db):
+        roles = default_global_roles()
+        roles[0]['permissions'] = [
+            {'key': 'people.manage', 'visible': True, 'edit': True},
+            {'key': 'roles.manage', 'visible': True, 'edit': True},
+        ]
+        mock_roles_db.list_roles.return_value = roles
+
+        resp = self.client.get('/api/v1/global-roles/permissions-matrix/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        role_ids = [r["id"] for r in resp.data["roles"]]
+        self.assertIn(SUPER_ADMIN_ROLE_ID, role_ids)
+        self.assertIn("Children", resp.data["matrix"])
+        first_row = resp.data["matrix"]["Children"][0]
+        self.assertIn(SUPER_ADMIN_ROLE_ID, first_row["roles"])
+
+
+# =============================================================================
+# save_global_permissions_matrix
+# =============================================================================
+
+@patch('roles.views.roles_db')
+@patch('roles.global_roles.roles_db')
+class SaveGlobalPermissionsMatrixTests(GlobalRolesAPITestCase):
+    def test_skips_unknown_role_ids(self, mock_global_roles_db, mock_views_roles_db):
+        mock_global_roles_db.list_roles.return_value = default_global_roles()
+        payload = {"unknown-role-id": {"people.manage": {"visible": True, "edit": True}}}
+
+        resp = self.client.put('/api/v1/global-roles/permissions-matrix/save/', payload, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["skipped_role_ids"], ["unknown-role-id"])
+        mock_views_roles_db.update_permission.assert_not_called()
+
+    def test_saves_permissions_for_valid_global_roles(self, mock_global_roles_db, mock_views_roles_db):
+        mock_global_roles_db.list_roles.return_value = default_global_roles()
+        payload = {
+            SUPER_ADMIN_ROLE_ID: {
+                "people.manage": {"visible": True, "edit": True},
+                "roles.manage": {"visible": True, "edit": True},
+            }
+        }
+
+        resp = self.client.put('/api/v1/global-roles/permissions-matrix/save/', payload, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertNotIn("skipped_role_ids", resp.data)
+        self.assertEqual(mock_views_roles_db.update_permission.call_count, 2)
+
+
+# =============================================================================
+# update_global_permission
+# =============================================================================
+
+@patch('roles.views.roles_db')
+class UpdateGlobalPermissionTests(GlobalRolesAPITestCase):
+    def test_role_not_found(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = None
+
+        resp = self.client.patch(
+            f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/permissions/people.manage/', {"visible": True}, format='json'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_scope_mismatch_is_404(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = {"id": CUSTOM_ROLE_ID, "centre_id": CENTRE_ID}
+
+        resp = self.client.patch(
+            f'/api/v1/global-roles/{CUSTOM_ROLE_ID}/permissions/people.manage/', {"visible": True}, format='json'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        mock_roles_db.update_permission.assert_not_called()
+
+    def test_success(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = default_global_roles()[1]
+        mock_roles_db.update_permission.return_value = {"key": "people.manage", "visible": True, "edit": True}
+
+        resp = self.client.patch(
+            f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/permissions/people.manage/',
+            {"visible": True, "edit": True}, format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_roles_db.update_permission.assert_called_once_with(
+            CENTRE_MANAGER_ROLE_ID, "people.manage", {"visible": True, "edit": True}
+        )
+
+
+# =============================================================================
+# resend_global_invite
+# =============================================================================
+
+@patch('roles.views.send_mail')
+@patch('roles.views.roles_db')
+class ResendGlobalInviteTests(GlobalRolesAPITestCase):
+    def test_role_not_found(self, mock_roles_db, mock_send_mail):
+        mock_roles_db.get_role.return_value = None
+
+        resp = self.client.post(f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/members/{USER_ID}/resend-invite/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_member_not_found(self, mock_roles_db, mock_send_mail):
+        mock_roles_db.get_role.return_value = default_global_roles()[1]
+
+        resp = self.client.post(f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/members/{USER_ID}/resend-invite/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_success(self, mock_roles_db, mock_send_mail):
+        role = default_global_roles(
+            centre_manager=[{"user_id": USER_ID, "name": "Priya", "email": "priya@example.com"}]
+        )[1]
+        mock_roles_db.get_role.return_value = role
+
+        resp = self.client.post(f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/members/{USER_ID}/resend-invite/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_send_mail.assert_called_once()
+
+    def test_email_failure_returns_500(self, mock_roles_db, mock_send_mail):
+        role = default_global_roles(
+            centre_manager=[{"user_id": USER_ID, "name": "Priya", "email": "priya@example.com"}]
+        )[1]
+        mock_roles_db.get_role.return_value = role
+        mock_send_mail.side_effect = Exception("SMTP down")
+
+        resp = self.client.post(f'/api/v1/global-roles/{CENTRE_MANAGER_ROLE_ID}/members/{USER_ID}/resend-invite/')
+
+        self.assertEqual(resp.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
