@@ -3,8 +3,22 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
-from dynamo_backend.services import children_db, progress_db
+from dynamo_backend.services import children_db, progress_db, sessions_db, centres_db
+from notifications.mailer import send_enrolment_added_email, send_enrolment_removed_email
 from .serializers import ContactSerializer, ChildEnrolmentSerializer
+
+
+def _resolve_enrolment_context(enrolment):
+    """Look up child/slot/session/centre/room for an enrolment's slot, for notification emails."""
+    child_id = enrolment.get('child_id') or enrolment.get('child')
+    slot_id = enrolment.get('slot_id') or enrolment.get('slot')
+    child = children_db.get_child(str(child_id)) if child_id else None
+    slot = sessions_db.get_slot(str(slot_id)) if slot_id else None
+    session = sessions_db.get_session(str(slot['session_id'])) if slot and slot.get('session_id') else None
+    centre_id = (child or {}).get('centre_id') or (slot or {}).get('centre_id')
+    centre = centres_db.get_centre(str(centre_id)) if centre_id else None
+    room = centres_db.get_room(str(slot['room_id'])) if slot and slot.get('room_id') else None
+    return child, slot, session, centre, room
 
 
 class ChildViewSet(viewsets.ViewSet):
@@ -212,6 +226,11 @@ class EnrolmentViewSet(viewsets.ViewSet):
         if child_pk:
             data['child_id'] = str(child_pk)
         enrolment = children_db.create_enrolment(data)
+
+        child, slot, session, centre, room = _resolve_enrolment_context(enrolment)
+        if child:
+            send_enrolment_added_email(child, slot, session, centre, room=room)
+
         return Response(enrolment, status=status.HTTP_201_CREATED)
 
     def retrieve(self, request, *args, **kwargs):
@@ -224,12 +243,30 @@ class EnrolmentViewSet(viewsets.ViewSet):
         enrolment = children_db.get_enrolment(str(kwargs['pk']))
         if not enrolment:
             return Response({'detail': 'Enrolment not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        new_slot_id = request.data.get('slot_id') or request.data.get('slot')
+        old_slot_id = enrolment.get('slot_id') or enrolment.get('slot')
+        slot_changed = bool(new_slot_id) and str(new_slot_id) != str(old_slot_id)
+
         updated = children_db.update_enrolment(str(kwargs['pk']), request.data)
+
+        if slot_changed:
+            child, slot, session, centre, room = _resolve_enrolment_context(updated)
+            if child:
+                send_enrolment_removed_email(child, slot, session, centre, reason='rescheduled', room=room)
+
         return Response(updated)
 
     def destroy(self, request, *args, **kwargs):
         enrolment = children_db.get_enrolment(str(kwargs['pk']))
         if not enrolment:
             return Response({'detail': 'Enrolment not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        child, slot, session, centre, room = _resolve_enrolment_context(enrolment)
+
         children_db.delete_enrolment(str(kwargs['pk']))
+
+        if child:
+            send_enrolment_removed_email(child, slot, session, centre, reason='removed', room=room)
+
         return Response(status=status.HTTP_204_NO_CONTENT)

@@ -9,9 +9,19 @@ from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import roles_db, centres_db, auth_db
+from notifications.mailer import send_permission_updated_email
 from .permissions_catalog import PERMISSION_CATEGORIES
 
 logger = logging.getLogger(__name__)
+
+
+def _notify_permission_changes(role_id, changed_summary):
+    """Send a permissions-updated email for a role after its permission flags changed."""
+    if not changed_summary:
+        return
+    role = roles_db.get_role(str(role_id))
+    if role:
+        send_permission_updated_email(role, changed_summary)
 
 
 class RoleViewSet(viewsets.ViewSet):
@@ -278,8 +288,11 @@ def save_permissions_matrix(request, centre_pk):
         if not role or role.get('centre_id') != str(centre_pk):
             skipped.append(role_id)
             continue
+        changed = []
         for key, flags in perms.items():
             roles_db.update_permission(str(role_id), key, flags)
+            changed.append((key, flags))
+        _notify_permission_changes(role_id, changed)
 
     resp = {'detail': 'Permissions saved successfully.'}
     if skipped:
@@ -295,6 +308,7 @@ def update_permission(request, role_pk, key):
     if not role:
         return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
     result = roles_db.update_permission(str(role_pk), key, request.data)
+    _notify_permission_changes(role_pk, [(key, result)])
     return Response(result)
 
 
