@@ -389,26 +389,29 @@ class PermissionsMatrixTests(RolesAPITestCase):
 # save_permissions_matrix
 # =============================================================================
 
+@patch('roles.views.send_permission_updated_email')
 @patch('roles.views.roles_db')
 @patch('roles.views.centres_db')
 class SavePermissionsMatrixTests(RolesAPITestCase):
-    def test_rejects_when_no_role_retains_admin_permissions(self, mock_centres_db, mock_roles_db):
+    def test_rejects_when_no_role_retains_admin_permissions(self, mock_centres_db, mock_roles_db, mock_send_email):
         payload = {ROLE_ID: {"people.manage": {"visible": False, "edit": False}}}
 
         resp = self.client.put(f'/api/v1/centres/{CENTRE_ID}/permissions-matrix/save/', payload, format='json')
 
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         mock_centres_db.get_centre.assert_not_called()
+        mock_send_email.assert_not_called()
 
-    def test_centre_not_found(self, mock_centres_db, mock_roles_db):
+    def test_centre_not_found(self, mock_centres_db, mock_roles_db, mock_send_email):
         mock_centres_db.get_centre.return_value = None
         payload = {ROLE_ID: {"people.manage": {"visible": True}, "roles.manage": {"visible": True}}}
 
         resp = self.client.put(f'/api/v1/centres/{CENTRE_ID}/permissions-matrix/save/', payload, format='json')
 
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        mock_send_email.assert_not_called()
 
-    def test_skips_roles_not_belonging_to_centre(self, mock_centres_db, mock_roles_db):
+    def test_skips_roles_not_belonging_to_centre(self, mock_centres_db, mock_roles_db, mock_send_email):
         mock_centres_db.get_centre.return_value = {"id": CENTRE_ID}
         other_centre = "77777777-7777-7777-7777-777777777777"
         mock_roles_db.get_role.return_value = basic_role(centre_id=other_centre)
@@ -424,8 +427,9 @@ class SavePermissionsMatrixTests(RolesAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data["skipped_role_ids"], [ROLE_ID])
         mock_roles_db.update_permission.assert_not_called()
+        mock_send_email.assert_not_called()
 
-    def test_saves_permissions_for_valid_roles(self, mock_centres_db, mock_roles_db):
+    def test_saves_permissions_for_valid_roles(self, mock_centres_db, mock_roles_db, mock_send_email):
         mock_centres_db.get_centre.return_value = {"id": CENTRE_ID}
         mock_roles_db.get_role.return_value = admin_role()
         payload = {
@@ -441,15 +445,21 @@ class SavePermissionsMatrixTests(RolesAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertNotIn("skipped_role_ids", resp.data)
         self.assertEqual(mock_roles_db.update_permission.call_count, 3)
+        # One notification per role touched, not one per permission key.
+        mock_send_email.assert_called_once()
+        notified_role, changed = mock_send_email.call_args[0]
+        self.assertEqual(notified_role, admin_role())
+        self.assertEqual(len(changed), 3)
 
 
 # =============================================================================
 # update_permission
 # =============================================================================
 
+@patch('roles.views.send_permission_updated_email')
 @patch('roles.views.roles_db')
 class UpdatePermissionTests(RolesAPITestCase):
-    def test_role_not_found(self, mock_roles_db):
+    def test_role_not_found(self, mock_roles_db, mock_send_email):
         mock_roles_db.get_role.return_value = None
 
         resp = self.client.patch(
@@ -457,8 +467,9 @@ class UpdatePermissionTests(RolesAPITestCase):
         )
 
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        mock_send_email.assert_not_called()
 
-    def test_success(self, mock_roles_db):
+    def test_success(self, mock_roles_db, mock_send_email):
         mock_roles_db.get_role.return_value = basic_role()
         mock_roles_db.update_permission.return_value = {"key": "children.view_info", "visible": True, "edit": True}
 
@@ -469,6 +480,9 @@ class UpdatePermissionTests(RolesAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         mock_roles_db.update_permission.assert_called_once_with(
             ROLE_ID, "children.view_info", {"visible": True, "edit": True}
+        )
+        mock_send_email.assert_called_once_with(
+            basic_role(), [("children.view_info", {"key": "children.view_info", "visible": True, "edit": True})]
         )
 
 

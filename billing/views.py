@@ -34,6 +34,7 @@ class InvoiceViewSet(viewsets.ViewSet):
         data = request.data.copy()
         data['user_id'] = str(request.user.id)
         invoice = billing_db.create_invoice(data)
+        send_invoice_email(invoice)
         return Response(invoice, status=status.HTTP_201_CREATED)
 
     def partial_update(self, request, *args, **kwargs):

@@ -471,10 +471,16 @@ class EnrolmentListTests(ChildrenAPITestCase):
         mock_children_db.list_enrolments.assert_called_once_with(CHILD_ID)
 
 
+@patch('children.views.send_enrolment_added_email')
+@patch('children.views.centres_db')
+@patch('children.views.sessions_db')
 @patch('children.views.children_db')
 class EnrolmentCreateTests(ChildrenAPITestCase):
-    def test_create_nested_under_child_sets_child_id(self, mock_children_db):
+    def test_create_nested_under_child_sets_child_id(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_added_email
+    ):
         mock_children_db.create_enrolment.return_value = {"id": ENROLMENT_ID, "child_id": CHILD_ID}
+        mock_children_db.get_child.return_value = None  # not the concern of this test; see email hook tests below
         payload = {"startDate": "2023-01-01", "endDate": "2023-12-31"}
 
         resp = self.client.post(f'/api/v1/children/{CHILD_ID}/enrolments/', payload, format='json')
@@ -483,8 +489,11 @@ class EnrolmentCreateTests(ChildrenAPITestCase):
         sent_data = mock_children_db.create_enrolment.call_args[0][0]
         self.assertEqual(sent_data["child_id"], CHILD_ID)
 
-    def test_create_standalone_requires_child_id_in_body(self, mock_children_db):
+    def test_create_standalone_requires_child_id_in_body(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_added_email
+    ):
         mock_children_db.create_enrolment.return_value = {"id": ENROLMENT_ID, "child_id": CHILD_ID}
+        mock_children_db.get_child.return_value = None
         payload = {"childId": CHILD_ID, "startDate": "2023-01-01", "endDate": "2023-12-31"}
 
         resp = self.client.post('/api/v1/enrolments/', payload, format='json')
@@ -493,24 +502,63 @@ class EnrolmentCreateTests(ChildrenAPITestCase):
         sent_data = mock_children_db.create_enrolment.call_args[0][0]
         self.assertEqual(sent_data["child_id"], CHILD_ID)
 
+    def test_create_with_unresolvable_child_sends_no_email(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_added_email
+    ):
+        mock_children_db.create_enrolment.return_value = {"id": ENROLMENT_ID, "child_id": CHILD_ID}
+        mock_children_db.get_child.return_value = None
 
+        resp = self.client.post(f'/api/v1/children/{CHILD_ID}/enrolments/', {"startDate": "2023-01-01"}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        mock_send_enrolment_added_email.assert_not_called()
+
+    def test_create_with_resolvable_child_sends_added_email(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_added_email
+    ):
+        slot_id = "77777777-7777-7777-7777-777777777777"
+        mock_children_db.create_enrolment.return_value = {
+            "id": ENROLMENT_ID, "child_id": CHILD_ID, "slot_id": slot_id,
+        }
+        child = {"id": CHILD_ID, "first_name": "Kid", "centre_id": CENTRE_ID, "contacts": []}
+        slot = {"id": slot_id, "session_id": "session-1", "room_id": "room-1", "centre_id": CENTRE_ID}
+        session = {"id": "session-1", "name": "Morning"}
+        centre = {"id": CENTRE_ID, "name": "Centre A"}
+        room = {"id": "room-1", "name": "Room 1"}
+        mock_children_db.get_child.return_value = child
+        mock_sessions_db.get_slot.return_value = slot
+        mock_sessions_db.get_session.return_value = session
+        mock_centres_db.get_centre.return_value = centre
+        mock_centres_db.get_room.return_value = room
+
+        resp = self.client.post(
+            f'/api/v1/children/{CHILD_ID}/enrolments/', {"slotId": slot_id}, format='json'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        mock_send_enrolment_added_email.assert_called_once_with(child, slot, session, centre, room=room)
+
+
+@patch('children.views.send_enrolment_removed_email')
+@patch('children.views.centres_db')
+@patch('children.views.sessions_db')
 @patch('children.views.children_db')
 class EnrolmentRetrieveUpdateDestroyTests(ChildrenAPITestCase):
-    def test_retrieve_not_found(self, mock_children_db):
+    def test_retrieve_not_found(self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email):
         mock_children_db.get_enrolment.return_value = None
 
         resp = self.client.get(f'/api/v1/enrolments/{ENROLMENT_ID}/')
 
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_retrieve_found(self, mock_children_db):
+    def test_retrieve_found(self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email):
         mock_children_db.get_enrolment.return_value = {"id": ENROLMENT_ID}
 
         resp = self.client.get(f'/api/v1/enrolments/{ENROLMENT_ID}/')
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
 
-    def test_update_not_found(self, mock_children_db):
+    def test_update_not_found(self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email):
         mock_children_db.get_enrolment.return_value = None
 
         resp = self.client.patch(f'/api/v1/enrolments/{ENROLMENT_ID}/', {"endDate": "2024-01-01"}, format='json')
@@ -518,7 +566,7 @@ class EnrolmentRetrieveUpdateDestroyTests(ChildrenAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
         mock_children_db.update_enrolment.assert_not_called()
 
-    def test_update_success(self, mock_children_db):
+    def test_update_success(self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email):
         mock_children_db.get_enrolment.return_value = {"id": ENROLMENT_ID}
         mock_children_db.update_enrolment.return_value = {"id": ENROLMENT_ID, "end_date": "2024-01-01"}
 
@@ -526,8 +574,11 @@ class EnrolmentRetrieveUpdateDestroyTests(ChildrenAPITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         mock_children_db.update_enrolment.assert_called_once_with(ENROLMENT_ID, {"end_date": "2024-01-01"})
+        # No slot/slot_id in the payload — not a reschedule, so no context resolution or email.
+        mock_children_db.get_child.assert_not_called()
+        mock_send_enrolment_removed_email.assert_not_called()
 
-    def test_destroy_not_found_via_standalone_route(self, mock_children_db):
+    def test_destroy_not_found_via_standalone_route(self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email):
         mock_children_db.get_enrolment.return_value = None
 
         resp = self.client.delete(f'/api/v1/enrolments/{ENROLMENT_ID}/')
@@ -535,10 +586,130 @@ class EnrolmentRetrieveUpdateDestroyTests(ChildrenAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
         mock_children_db.delete_enrolment.assert_not_called()
 
-    def test_destroy_success_via_nested_route(self, mock_children_db):
+    def test_destroy_success_via_nested_route(self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email):
         mock_children_db.get_enrolment.return_value = {"id": ENROLMENT_ID, "child_id": CHILD_ID}
+        mock_children_db.get_child.return_value = None  # not the concern of this test; see email hook tests below
 
         resp = self.client.delete(f'/api/v1/children/{CHILD_ID}/enrolments/{ENROLMENT_ID}/')
 
         self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+
+
+# =============================================================================
+# EnrolmentViewSet: destroy / slot-change email hooks (Req: child removed /
+# slot changes notify parent contacts + centre admins)
+# =============================================================================
+
+@patch('children.views.send_enrolment_removed_email')
+@patch('children.views.centres_db')
+@patch('children.views.sessions_db')
+@patch('children.views.children_db')
+class EnrolmentDestroyEmailHookTests(ChildrenAPITestCase):
+    def test_destroy_with_resolvable_child_sends_removed_email(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email
+    ):
+        slot_id = "77777777-7777-7777-7777-777777777777"
+        mock_children_db.get_enrolment.return_value = {"id": ENROLMENT_ID, "child_id": CHILD_ID, "slot_id": slot_id}
+        child = {"id": CHILD_ID, "first_name": "Kid", "centre_id": CENTRE_ID, "contacts": []}
+        slot = {"id": slot_id, "session_id": "session-1", "room_id": "room-1"}
+        session = {"id": "session-1", "name": "Morning"}
+        centre = {"id": CENTRE_ID, "name": "Centre A"}
+        room = {"id": "room-1", "name": "Room 1"}
+        mock_children_db.get_child.return_value = child
+        mock_sessions_db.get_slot.return_value = slot
+        mock_sessions_db.get_session.return_value = session
+        mock_centres_db.get_centre.return_value = centre
+        mock_centres_db.get_room.return_value = room
+
+        resp = self.client.delete(f'/api/v1/children/{CHILD_ID}/enrolments/{ENROLMENT_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        mock_send_enrolment_removed_email.assert_called_once_with(
+            child, slot, session, centre, reason='removed', room=room
+        )
+
+    def test_destroy_resolves_context_before_deleting(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email
+    ):
+        # The enrolment (and its slot_id) must be read before delete_enrolment runs,
+        # otherwise there's nothing left to resolve the notification context from.
+        mock_children_db.get_enrolment.return_value = {"id": ENROLMENT_ID, "child_id": CHILD_ID}
+        mock_children_db.get_child.return_value = {"id": CHILD_ID, "contacts": []}
+
+        self.client.delete(f'/api/v1/children/{CHILD_ID}/enrolments/{ENROLMENT_ID}/')
+
+        mock_children_db.get_child.assert_called_once_with(CHILD_ID)
         mock_children_db.delete_enrolment.assert_called_once_with(ENROLMENT_ID)
+
+    def test_destroy_with_unresolvable_child_sends_no_email(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email
+    ):
+        mock_children_db.get_enrolment.return_value = {"id": ENROLMENT_ID, "child_id": CHILD_ID}
+        mock_children_db.get_child.return_value = None
+
+        resp = self.client.delete(f'/api/v1/children/{CHILD_ID}/enrolments/{ENROLMENT_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        mock_send_enrolment_removed_email.assert_not_called()
+
+
+@patch('children.views.send_enrolment_removed_email')
+@patch('children.views.centres_db')
+@patch('children.views.sessions_db')
+@patch('children.views.children_db')
+class EnrolmentSlotChangeEmailHookTests(ChildrenAPITestCase):
+    def test_changing_slot_sends_rescheduled_email(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email
+    ):
+        old_slot_id = "77777777-7777-7777-7777-777777777777"
+        new_slot_id = "88888888-8888-8888-8888-888888888888"
+        mock_children_db.get_enrolment.return_value = {
+            "id": ENROLMENT_ID, "child_id": CHILD_ID, "slot_id": old_slot_id,
+        }
+        updated = {"id": ENROLMENT_ID, "child_id": CHILD_ID, "slot_id": new_slot_id}
+        mock_children_db.update_enrolment.return_value = updated
+        child = {"id": CHILD_ID, "first_name": "Kid", "centre_id": CENTRE_ID, "contacts": []}
+        new_slot = {"id": new_slot_id, "session_id": "session-1", "room_id": "room-1"}
+        session = {"id": "session-1", "name": "Afternoon"}
+        centre = {"id": CENTRE_ID, "name": "Centre A"}
+        room = {"id": "room-1", "name": "Room 1"}
+        mock_children_db.get_child.return_value = child
+        mock_sessions_db.get_slot.return_value = new_slot
+        mock_sessions_db.get_session.return_value = session
+        mock_centres_db.get_centre.return_value = centre
+        mock_centres_db.get_room.return_value = room
+
+        resp = self.client.patch(
+            f'/api/v1/enrolments/{ENROLMENT_ID}/', {"slotId": new_slot_id}, format='json'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        # Resolves against the *new* slot (looked up from the updated enrolment), not the old one.
+        mock_sessions_db.get_slot.assert_called_once_with(new_slot_id)
+        mock_send_enrolment_removed_email.assert_called_once_with(
+            child, new_slot, session, centre, reason='rescheduled', room=room
+        )
+
+    def test_setting_slot_to_the_same_value_sends_no_email(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email
+    ):
+        slot_id = "77777777-7777-7777-7777-777777777777"
+        mock_children_db.get_enrolment.return_value = {"id": ENROLMENT_ID, "child_id": CHILD_ID, "slot_id": slot_id}
+        mock_children_db.update_enrolment.return_value = {"id": ENROLMENT_ID, "slot_id": slot_id}
+
+        resp = self.client.patch(f'/api/v1/enrolments/{ENROLMENT_ID}/', {"slotId": slot_id}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_send_enrolment_removed_email.assert_not_called()
+        mock_children_db.get_child.assert_not_called()
+
+    def test_unrelated_field_update_sends_no_email(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email
+    ):
+        mock_children_db.get_enrolment.return_value = {"id": ENROLMENT_ID, "child_id": CHILD_ID, "slot_id": "s1"}
+        mock_children_db.update_enrolment.return_value = {"id": ENROLMENT_ID, "end_date": "2024-01-01"}
+
+        resp = self.client.patch(f'/api/v1/enrolments/{ENROLMENT_ID}/', {"endDate": "2024-01-01"}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_send_enrolment_removed_email.assert_not_called()

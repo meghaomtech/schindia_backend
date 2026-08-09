@@ -155,6 +155,88 @@ class InvoiceViewSetTests(BillingAPITestCase):
 
 
 # =============================================================================
+# InvoiceViewSet.create: triggers send_invoice_email (Req: email on generation,
+# not just on manual resend)
+# =============================================================================
+
+@patch('billing.views.send_invoice_email')
+@patch('billing.views.billing_db')
+class InvoiceCreateEmailHookTests(BillingAPITestCase):
+    def test_create_triggers_invoice_email_with_created_invoice(self, mock_db, mock_send_invoice_email):
+        created = {"id": INVOICE_ID, "user_id": USER_ID, "child_id": CHILD_ID}
+        mock_db.create_invoice.return_value = created
+
+        resp = self.client.post('/api/v1/invoices/', {"childId": CHILD_ID, "totalAmount": 100}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        mock_send_invoice_email.assert_called_once_with(created)
+
+    def test_create_nested_under_child_also_triggers_invoice_email(self, mock_db, mock_send_invoice_email):
+        created = {"id": INVOICE_ID, "child_id": CHILD_ID}
+        mock_db.create_invoice.return_value = created
+
+        resp = self.client.post(f'/api/v1/children/{CHILD_ID}/invoices/', {"totalAmount": 50}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        mock_send_invoice_email.assert_called_once_with(created)
+
+    def test_email_failure_does_not_block_invoice_creation(self, mock_db, mock_send_invoice_email):
+        # send_invoice_email itself never raises (see billing/notifications.py), but the
+        # view shouldn't depend on that — a broken return value must not affect the response.
+        mock_db.create_invoice.return_value = {"id": INVOICE_ID}
+        mock_send_invoice_email.return_value = {"sent": False, "reason": "no_contacts", "results": []}
+
+        resp = self.client.post('/api/v1/invoices/', {"totalAmount": 100}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+
+
+@patch('billing.notifications.send_mail')
+@patch('billing.notifications.children_db')
+@patch('billing.notifications.centres_db')
+@patch('billing.views.billing_db')
+class InvoiceCreateEmailEndToEndTests(BillingAPITestCase):
+    """
+    Exercises the real send_invoice_email (not mocked) through the create() hook,
+    to prove the wiring — not just that *some* function got called — actually
+    resolves a real child's parent contact and sends mail.
+    """
+
+    def test_create_with_linked_child_sends_email_to_parent_contact(
+        self, mock_db, mock_centres_db, mock_children_db, mock_send_mail
+    ):
+        mock_db.create_invoice.return_value = {
+            "id": INVOICE_ID, "number": "INV-001", "child_id": CHILD_ID,
+            "total_amount": 100, "due_date": "2026-08-01",
+        }
+        mock_children_db.get_child.return_value = {
+            "id": CHILD_ID, "first_name": "Kid", "last_name": "One", "centre_id": CENTRE_ID,
+            "contacts": [{"invite_as": "Parent", "email": "parent@example.com", "name": "Pat"}],
+        }
+        mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "name": "Centre A"}
+
+        resp = self.client.post('/api/v1/invoices/', {"childId": CHILD_ID, "totalAmount": 100}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        mock_send_mail.assert_called_once()
+        self.assertEqual(mock_send_mail.call_args.kwargs['recipient_list'], ['parent@example.com'])
+
+    def test_create_without_child_id_sends_no_email(
+        self, mock_db, mock_centres_db, mock_children_db, mock_send_mail
+    ):
+        # Reproduces a real bug this was built to catch: an invoice generated from a
+        # blank form (no child selected) has no child_id, so there's no parent contact
+        # to resolve and the email silently never goes out.
+        mock_db.create_invoice.return_value = {"id": INVOICE_ID, "total_amount": 100}
+
+        resp = self.client.post('/api/v1/invoices/', {"totalAmount": 100}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        mock_send_mail.assert_not_called()
+        mock_children_db.get_child.assert_not_called()
+
+
+# =============================================================================
 # InvoiceViewSet custom actions: send / mark_paid / mark_overdue / resend_email
 # =============================================================================
 
