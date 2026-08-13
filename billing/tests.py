@@ -16,6 +16,8 @@ from django.test import SimpleTestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from roles.access import UserAccess
+
 CHILD_ID = "11111111-1111-1111-1111-111111111111"
 CENTRE_ID = "22222222-2222-2222-2222-222222222222"
 INVOICE_ID = "33333333-3333-3333-3333-333333333333"
@@ -36,12 +38,22 @@ class FakeUser:
 
 
 class BillingAPITestCase(SimpleTestCase):
-    """Common client setup for an authenticated, approved user."""
+    """Common client setup for an authenticated, approved user. Also grants
+    unrestricted access by default (root-equivalent UserAccess), so these
+    tests exercise business logic rather than the permission matrix — see
+    roles/test_access.py for that. Tests that need to assert enforcement
+    itself override self.mock_get_user_access.return_value.
+    """
 
     def setUp(self):
         self.client = APIClient()
         self.user = FakeUser()
         self.client.force_authenticate(user=self.user)
+
+        access_patcher = patch('billing.views.get_user_access')
+        self.mock_get_user_access = access_patcher.start()
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=True)
+        self.addCleanup(access_patcher.stop)
 
 
 # =============================================================================
@@ -745,3 +757,55 @@ class CentrePaymentsTests(BillingAPITestCase):
         resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/invoices/payments/')
 
         self.assertEqual(resp.data["payments"][0]["student_name"], "Alice A")
+
+
+# =============================================================================
+# Permission-matrix enforcement (dynamic role-based access — see roles/access.py)
+# =============================================================================
+
+@patch('billing.views.children_db')
+@patch('billing.views.billing_db')
+class BillingEnforcementTests(BillingAPITestCase):
+    """Unlike the rest of this file, these tests give the acting user a
+    restricted (non-root) UserAccess to verify the enforcement itself,
+    rather than the business logic downstream of it. Billing records are
+    only centre-scoped (no per-key view/edit matrix yet — see the plan).
+    """
+
+    def test_list_invoices_nested_under_child_returns_404_when_centre_inaccessible(
+        self, mock_billing_db, mock_children_db
+    ):
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=False)
+        mock_children_db.get_child.return_value = {"id": CHILD_ID, "centre_id": CENTRE_ID}
+
+        resp = self.client.get(f'/api/v1/children/{CHILD_ID}/invoices/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        mock_billing_db.list_invoices.assert_not_called()
+
+    def test_list_invoices_nested_under_child_succeeds_for_a_member(
+        self, mock_billing_db, mock_children_db
+    ):
+        access = UserAccess(unrestricted=False)
+        access.centres[CENTRE_ID] = {
+            'data_scope': 'own', 'role_names': ['Manager'], 'name': '', 'system_id': '', 'permissions': {},
+        }
+        self.mock_get_user_access.return_value = access
+        mock_children_db.get_child.return_value = {"id": CHILD_ID, "centre_id": CENTRE_ID}
+        mock_billing_db.list_invoices.return_value = []
+
+        resp = self.client.get(f'/api/v1/children/{CHILD_ID}/invoices/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_billing_db.list_invoices.assert_called_once_with(child_id=CHILD_ID)
+
+    def test_own_invoices_list_is_never_centre_gated(self, mock_billing_db, mock_children_db):
+        # The non-nested /invoices/ list always scopes to the caller's own
+        # invoices (user_id filter) — it doesn't go through centre access at all.
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=False)
+        mock_billing_db.list_invoices.return_value = []
+
+        resp = self.client.get('/api/v1/invoices/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_billing_db.list_invoices.assert_called_once_with(user_id=USER_ID)

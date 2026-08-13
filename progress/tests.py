@@ -12,6 +12,8 @@ from django.test import SimpleTestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from roles.access import UserAccess
+
 CHILD_ID = "11111111-1111-1111-1111-111111111111"
 CENTRE_ID = "22222222-2222-2222-2222-222222222222"
 ENTRY_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -31,10 +33,21 @@ class FakeUser:
 
 
 class ProgressAPITestCase(SimpleTestCase):
+    """Grants the acting user unrestricted access by default (root-equivalent
+    UserAccess), so these tests exercise business logic rather than the
+    permission matrix — see roles/test_access.py for that. Tests that need to
+    assert enforcement itself override self.mock_get_user_access.return_value.
+    """
+
     def setUp(self):
         self.client = APIClient()
         self.user = FakeUser()
         self.client.force_authenticate(user=self.user)
+
+        access_patcher = patch('progress.views.get_user_access')
+        self.mock_get_user_access = access_patcher.start()
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=True)
+        self.addCleanup(access_patcher.stop)
 
 
 # =============================================================================
@@ -593,3 +606,40 @@ class ChildStatsTests(ProgressAPITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data["total_sessions"], 10)
+
+
+# =============================================================================
+# Permission-matrix enforcement (dynamic role-based access — see roles/access.py)
+# =============================================================================
+
+@patch('progress.views.children_db')
+@patch('progress.views.progress_db')
+class ProgressEnforcementTests(ProgressAPITestCase):
+    """Unlike the rest of this file, these tests give the acting user a
+    restricted (non-root) UserAccess to verify the enforcement itself,
+    rather than the business logic downstream of it. Progress records are
+    only centre-scoped (no per-key view/edit matrix yet — see the plan).
+    """
+
+    def test_list_notes_returns_404_when_child_centre_is_not_accessible(self, mock_progress_db, mock_children_db):
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=False)
+        mock_children_db.get_child.return_value = {"id": CHILD_ID, "centre_id": CENTRE_ID}
+
+        resp = self.client.get(f'/api/v1/children/{CHILD_ID}/notes/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        mock_progress_db.list_notes.assert_not_called()
+
+    def test_list_notes_succeeds_for_a_member_of_the_childs_centre(self, mock_progress_db, mock_children_db):
+        access = UserAccess(unrestricted=False)
+        access.centres[CENTRE_ID] = {
+            'data_scope': 'own', 'role_names': ['Teacher'], 'name': '', 'system_id': '', 'permissions': {},
+        }
+        self.mock_get_user_access.return_value = access
+        mock_children_db.get_child.return_value = {"id": CHILD_ID, "centre_id": CENTRE_ID}
+        mock_progress_db.list_notes.return_value = []
+
+        resp = self.client.get(f'/api/v1/children/{CHILD_ID}/notes/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_progress_db.list_notes.assert_called_once_with(CHILD_ID)

@@ -13,6 +13,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from roles.permissions_catalog import ALL_PERMISSION_KEYS
+from roles.access import UserAccess
 
 CENTRE_ID = "22222222-2222-2222-2222-222222222222"
 ROOM_ID = "66666666-6666-6666-6666-666666666666"
@@ -52,10 +53,21 @@ class FakeUser:
 
 
 class CentresAPITestCase(SimpleTestCase):
+    """Grants the acting user unrestricted access by default (root-equivalent
+    UserAccess), so these tests exercise business logic rather than the
+    permission matrix — see roles/test_access.py for that. Tests that need to
+    assert enforcement itself override self.mock_get_user_access.return_value.
+    """
+
     def setUp(self):
         self.client = APIClient()
         self.user = FakeUser()
         self.client.force_authenticate(user=self.user)
+
+        access_patcher = patch('centres.views.get_user_access')
+        self.mock_get_user_access = access_patcher.start()
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=True)
+        self.addCleanup(access_patcher.stop)
 
 
 # =============================================================================
@@ -215,14 +227,16 @@ class CentreCreateTests(CentresAPITestCase):
         # Room created against the new centre
         mock_centres_db.create_room.assert_called_once_with(CENTRE_ID, {"name": "Room 1"})
 
-        # Default Admin role created with every catalog permission, editable + visible
+        # Default Admin role created with every catalog permission, editable + visible,
+        # plus the admin-lockout keys (people.manage/roles.manage) so the creator isn't
+        # locked out of managing their own centre's roles/people.
         role_args = mock_roles_db.create_role.call_args[0]
         self.assertEqual(role_args[0], CENTRE_ID)
         role_data = role_args[1]
         self.assertEqual(role_data["name"], "Admin")
         self.assertEqual(role_data["data_scope"], "all")
         sent_keys = [p["key"] for p in role_data["permissions"]]
-        self.assertEqual(sent_keys, ALL_PERMISSION_KEYS)
+        self.assertEqual(sent_keys, ALL_PERMISSION_KEYS + ["people.manage", "roles.manage"])
         self.assertTrue(all(p["edit"] and p["visible"] for p in role_data["permissions"]))
 
         # Requesting user added as a member of that role
@@ -478,3 +492,53 @@ class RoomDestroyTests(CentresAPITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
         mock_centres_db.delete_room.assert_called_once_with(ROOM_ID)
+
+
+# =============================================================================
+# Permission-matrix enforcement (dynamic role-based access — see roles/access.py)
+# =============================================================================
+
+@patch('centres.views.centres_db')
+class CentreEnforcementTests(CentresAPITestCase):
+    """Unlike the rest of this file, these tests give the acting user a
+    restricted (non-root) UserAccess to verify the enforcement itself,
+    rather than the business logic downstream of it.
+    """
+
+    def test_list_only_returns_centres_the_user_belongs_to(self, mock_centres_db):
+        access = UserAccess(unrestricted=False)
+        access.centres[CENTRE_ID] = {
+            'data_scope': 'own', 'role_names': ['Manager'], 'name': '', 'system_id': '',
+            'permissions': {},
+        }
+        self.mock_get_user_access.return_value = access
+        mock_centres_db.list_centres.return_value = [
+            {"id": CENTRE_ID, "name": "Centre A"},
+            {"id": "other-centre", "name": "Centre B"},
+        ]
+
+        resp = self.client.get('/api/v1/centres/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual([c["id"] for c in resp.data], [CENTRE_ID])
+
+    def test_retrieve_returns_404_for_centre_the_user_is_not_a_member_of(self, mock_centres_db):
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=False)
+
+        resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        mock_centres_db.get_centre.assert_not_called()
+
+    def test_update_returns_403_without_configure_centre_settings_permission(self, mock_centres_db):
+        access = UserAccess(unrestricted=False)
+        access.centres[CENTRE_ID] = {
+            'data_scope': 'own', 'role_names': ['Manager'], 'name': '', 'system_id': '',
+            'permissions': {},  # no admin.configure_centre_settings
+        }
+        self.mock_get_user_access.return_value = access
+
+        resp = self.client.patch(f'/api/v1/centres/{CENTRE_ID}/', {"name": "New Name"}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        mock_centres_db.update_centre.assert_not_called()

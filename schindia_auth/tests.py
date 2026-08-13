@@ -496,7 +496,10 @@ class MeViewTests(AuthAPITestCase):
     def test_success_includes_permissions_and_centres_from_role_membership(
         self, mock_auth_db, mock_roles_db, mock_centres_db
     ):
-        self.client.force_authenticate(user=FakeUser())
+        # role="staff": a custom per-centre role, not one of the unrestricted
+        # global roles ('root'/'admin') — this test wants the scoped,
+        # membership-driven path exercised.
+        self.client.force_authenticate(user=FakeUser(role="staff"))
         mock_auth_db.get_user_by_id.return_value = approved_user()
         mock_centres_db.list_centres.return_value = [{"id": "centre-1", "name": "Centre A", "system_id": "SC-001"}]
         mock_roles_db.list_roles.return_value = [{

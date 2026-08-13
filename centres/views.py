@@ -5,6 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import centres_db, sessions_db, children_db, roles_db
 from roles.permissions_catalog import ALL_PERMISSION_KEYS
+from roles.access import get_user_access, centre_not_found, permission_denied
 from .serializers import CentreCreateSerializer, RoomSerializer
 
 
@@ -17,11 +18,19 @@ class CentreViewSet(viewsets.ViewSet):
         return CentreCreateSerializer(*args, **kwargs)
 
     def list(self, request, *args, **kwargs):
+        access = get_user_access(request.user, request)
+        accessible = access.accessible_centre_ids()
         centres = centres_db.list_centres()
+        if accessible is not None:
+            centres = [c for c in centres if c['id'] in accessible]
         return Response(centres)
 
     def retrieve(self, request, *args, **kwargs):
-        centre = centres_db.get_centre(str(kwargs['pk']))
+        centre_id = str(kwargs['pk'])
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        centre = centres_db.get_centre(centre_id)
         if not centre:
             return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
         return Response(centre)
@@ -39,10 +48,16 @@ class CentreViewSet(viewsets.ViewSet):
         for room_data in rooms_data:
             centres_db.create_room(centre['id'], room_data)
 
-        # Create default Admin role with every permission in the catalog (Req 15.4)
+        # Create default Admin role with every permission in the catalog (Req 15.4),
+        # plus the admin-lockout keys ('people.manage'/'roles.manage' — see
+        # roles/views.py admin_keys) which aren't part of the visible matrix
+        # catalog but gate the roles/people-management endpoints.
         permissions = [
             {'key': key, 'edit': True, 'visible': True}
             for key in ALL_PERMISSION_KEYS
+        ] + [
+            {'key': key, 'edit': True, 'visible': True}
+            for key in ('people.manage', 'roles.manage')
         ]
         role_data = {
             'name': 'Admin',
@@ -65,6 +80,12 @@ class CentreViewSet(viewsets.ViewSet):
 
     def partial_update(self, request, *args, **kwargs):
         centre_id = str(kwargs['pk'])
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_edit(centre_id, 'admin.configure_centre_settings'):
+            return permission_denied()
+
         centre = centres_db.get_centre(centre_id)
         if not centre:
             return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -134,6 +155,11 @@ class CentreViewSet(viewsets.ViewSet):
 
     def destroy(self, request, *args, **kwargs):
         centre_id = str(kwargs['pk'])
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_edit(centre_id, 'admin.configure_centre_settings'):
+            return permission_denied()
 
         centre = centres_db.get_centre(centre_id)
         if not centre:
@@ -177,16 +203,35 @@ class RoomViewSet(viewsets.ViewSet):
     serializer_class = RoomSerializer
 
     def list(self, request, *args, **kwargs):
-        rooms = centres_db.get_rooms(str(kwargs['centre_pk']))
+        centre_pk = str(kwargs['centre_pk'])
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_pk):
+            return centre_not_found()
+        if not access.can_view(centre_pk, 'admin.manage_departments_rooms'):
+            return permission_denied()
+        rooms = centres_db.get_rooms(centre_pk)
         return Response(rooms)
 
     def retrieve(self, request, *args, **kwargs):
+        centre_pk = str(kwargs['centre_pk'])
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_pk):
+            return centre_not_found()
+        if not access.can_view(centre_pk, 'admin.manage_departments_rooms'):
+            return permission_denied()
         room = centres_db.get_room(str(kwargs['pk']))
-        if not room or room.get('centre_id') != str(kwargs['centre_pk']):
+        if not room or room.get('centre_id') != centre_pk:
             return Response({'detail': 'Room not found.'}, status=status.HTTP_404_NOT_FOUND)
         return Response(room)
 
     def create(self, request, *args, **kwargs):
+        centre_pk = str(kwargs['centre_pk'])
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_pk):
+            return centre_not_found()
+        if not access.can_edit(centre_pk, 'admin.add_rooms'):
+            return permission_denied()
+
         data = request.data.copy()
 
         # Validate room name
@@ -203,7 +248,6 @@ class RoomViewSet(viewsets.ViewSet):
             )
 
         # Check name uniqueness within centre
-        centre_pk = str(kwargs['centre_pk'])
         existing_rooms = centres_db.get_rooms(centre_pk)
         for r in existing_rooms:
             if r.get('name', '').lower() == name.lower():
@@ -217,6 +261,13 @@ class RoomViewSet(viewsets.ViewSet):
         return Response(room, status=status.HTTP_201_CREATED)
 
     def partial_update(self, request, *args, **kwargs):
+        centre_pk = str(kwargs['centre_pk'])
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_pk):
+            return centre_not_found()
+        if not access.can_edit(centre_pk, 'admin.edit_rooms'):
+            return permission_denied()
+
         data = request.data.copy()
 
         # Validate room name if provided
@@ -234,7 +285,6 @@ class RoomViewSet(viewsets.ViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             # Check uniqueness within centre
-            centre_pk = str(kwargs['centre_pk'])
             existing_rooms = centres_db.get_rooms(centre_pk)
             for r in existing_rooms:
                 if r.get('id') != str(kwargs['pk']) and r.get('name', '').lower() == name.lower():
@@ -251,6 +301,13 @@ class RoomViewSet(viewsets.ViewSet):
 
     def destroy(self, request, *args, **kwargs):
         """Prevent removal of rooms with timetable assignments (Req 5.7)."""
+        centre_pk = str(kwargs['centre_pk'])
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_pk):
+            return centre_not_found()
+        if not access.can_edit(centre_pk, 'admin.delete_rooms'):
+            return permission_denied()
+
         room_id = str(kwargs['pk'])
         # Use room_id-index for efficient lookup instead of scanning all centre slots
         room_slots = sessions_db.list_slots_by_room(room_id)

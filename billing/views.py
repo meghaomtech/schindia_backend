@@ -8,9 +8,18 @@ from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import billing_db, centres_db, children_db
+from roles.access import get_user_access, centre_not_found
 from .notifications import send_invoice_email
 
 logger = logging.getLogger(__name__)
+
+
+def _child_centre_id(child_id):
+    """Resolve the centre a child belongs to, for scope checks."""
+    if not child_id:
+        return None
+    child = children_db.get_child(str(child_id))
+    return child.get('centre_id') if child else None
 
 
 class InvoiceViewSet(viewsets.ViewSet):
@@ -19,8 +28,12 @@ class InvoiceViewSet(viewsets.ViewSet):
     def list(self, request, *args, **kwargs):
         child_pk = self.kwargs.get('child_pk')
         if child_pk:
+            access = get_user_access(request.user, request)
+            if not access.can_access_centre(_child_centre_id(child_pk)):
+                return centre_not_found()
             invoices = billing_db.list_invoices(child_id=str(child_pk))
         else:
+            # Not centre-scoped: only ever returns the caller's own invoices.
             invoices = billing_db.list_invoices(user_id=str(request.user.id))
         return Response(invoices)
 
@@ -28,9 +41,18 @@ class InvoiceViewSet(viewsets.ViewSet):
         invoice = billing_db.get_invoice(str(kwargs['pk']))
         if not invoice:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+            return centre_not_found('Invoice not found.')
         return Response(invoice)
 
     def create(self, request, *args, **kwargs):
+        child_pk = self.kwargs.get('child_pk')
+        if child_pk:
+            access = get_user_access(request.user, request)
+            if not access.can_access_centre(_child_centre_id(child_pk)):
+                return centre_not_found()
+
         data = request.data.copy()
         data['user_id'] = str(request.user.id)
         invoice = billing_db.create_invoice(data)
@@ -38,10 +60,22 @@ class InvoiceViewSet(viewsets.ViewSet):
         return Response(invoice, status=status.HTTP_201_CREATED)
 
     def partial_update(self, request, *args, **kwargs):
+        invoice = billing_db.get_invoice(str(kwargs['pk']))
+        if not invoice:
+            return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+            return centre_not_found('Invoice not found.')
         invoice = billing_db.update_invoice(str(kwargs['pk']), request.data)
         return Response(invoice)
 
     def destroy(self, request, *args, **kwargs):
+        invoice = billing_db.get_invoice(str(kwargs['pk']))
+        if not invoice:
+            return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+            return centre_not_found('Invoice not found.')
         billing_db.delete_invoice(str(kwargs['pk']))
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -51,6 +85,9 @@ class InvoiceViewSet(viewsets.ViewSet):
         invoice = billing_db.get_invoice(str(pk))
         if not invoice:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+            return centre_not_found('Invoice not found.')
         if invoice.get('status') == 'Paid':
             return Response(
                 {'detail': 'Cannot send a paid invoice.'},
@@ -68,6 +105,9 @@ class InvoiceViewSet(viewsets.ViewSet):
         invoice = billing_db.get_invoice(str(pk))
         if not invoice:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+            return centre_not_found('Invoice not found.')
         updated = billing_db.update_invoice(str(pk), {'status': 'Paid'})
         return Response(updated)
 
@@ -77,6 +117,9 @@ class InvoiceViewSet(viewsets.ViewSet):
         invoice = billing_db.get_invoice(str(pk))
         if not invoice:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+            return centre_not_found('Invoice not found.')
         updated = billing_db.update_invoice(str(pk), {'status': 'Overdue'})
         return Response(updated)
 
@@ -86,6 +129,9 @@ class InvoiceViewSet(viewsets.ViewSet):
         invoice = billing_db.get_invoice(str(pk))
         if not invoice:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+            return centre_not_found('Invoice not found.')
 
         result = send_invoice_email(invoice)
 
@@ -118,6 +164,19 @@ def invoice_summary(request):
     """Return invoice counts and totals grouped by status."""
     all_invoices = billing_db.list_invoices()
 
+    access = get_user_access(request.user, request)
+    accessible = access.accessible_centre_ids()
+    if accessible is not None:
+        centre_cache = {}
+        filtered = []
+        for inv in all_invoices:
+            child_id = inv.get('child_id')
+            if child_id not in centre_cache:
+                centre_cache[child_id] = _child_centre_id(child_id) if child_id else None
+            if centre_cache[child_id] in accessible:
+                filtered.append(inv)
+        all_invoices = filtered
+
     total_invoices = len(all_invoices)
     status_totals = {}
     for inv in all_invoices:
@@ -146,6 +205,9 @@ class PurchaseViewSet(viewsets.ViewSet):
         child_pk = self.kwargs.get('child_pk')
         if not child_pk:
             return Response([])
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(_child_centre_id(child_pk)):
+            return centre_not_found()
         purchases = billing_db.list_purchases(str(child_pk))
         return Response(purchases)
 
@@ -153,14 +215,29 @@ class PurchaseViewSet(viewsets.ViewSet):
         child_pk = self.kwargs.get('child_pk')
         if not child_pk:
             return Response({'detail': 'A child is required to create a purchase.'}, status=status.HTTP_400_BAD_REQUEST)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(_child_centre_id(child_pk)):
+            return centre_not_found()
         purchase = billing_db.create_purchase(str(child_pk), request.data.copy())
         return Response(purchase, status=status.HTTP_201_CREATED)
 
     def partial_update(self, request, *args, **kwargs):
+        purchase = billing_db.get_purchase(str(kwargs['pk']))
+        if not purchase:
+            return Response({'detail': 'Purchase not found.'}, status=status.HTTP_404_NOT_FOUND)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(_child_centre_id(purchase.get('child_id'))):
+            return centre_not_found('Purchase not found.')
         purchase = billing_db.update_purchase(str(kwargs['pk']), request.data)
         return Response(purchase)
 
     def destroy(self, request, *args, **kwargs):
+        purchase = billing_db.get_purchase(str(kwargs['pk']))
+        if not purchase:
+            return Response({'detail': 'Purchase not found.'}, status=status.HTTP_404_NOT_FOUND)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(_child_centre_id(purchase.get('child_id'))):
+            return centre_not_found('Purchase not found.')
         billing_db.delete_purchase(str(kwargs['pk']))
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -176,6 +253,10 @@ def centre_invoices(request, centre_pk):
     List all invoices for a centre with filtering (Req 29.8-10).
     Query params: status, date_from, date_to, search
     """
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_pk):
+        return centre_not_found()
+
     centre = centres_db.get_centre(str(centre_pk))
     if not centre:
         return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -242,6 +323,10 @@ def invoice_generate_data(request, centre_pk):
     Return pre-populated data for invoice generation (Req 29.3, 29.7, 30.1-2).
     Returns centre details + list of children at this centre with parent info.
     """
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_pk):
+        return centre_not_found()
+
     centre = centres_db.get_centre(str(centre_pk))
     if not centre:
         return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -304,6 +389,10 @@ def centre_payments(request, centre_pk):
     Payment tracking for a centre (Req 29.12).
     Returns invoices marked as paid with payment info.
     """
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_pk):
+        return centre_not_found()
+
     centre = centres_db.get_centre(str(centre_pk))
     if not centre:
         return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)

@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import children_db, progress_db, sessions_db, centres_db
 from notifications.mailer import send_enrolment_added_email, send_enrolment_removed_email
+from roles.access import get_user_access, centre_not_found, permission_denied
 from .serializers import ContactSerializer, ChildEnrolmentSerializer
 
 
@@ -32,6 +33,11 @@ class ChildViewSet(viewsets.ViewSet):
                 {'detail': 'centre query parameter is required.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_pk):
+            return centre_not_found()
+        if not access.can_view(centre_pk, 'children.view_info'):
+            return permission_denied()
         children = children_db.list_children(str(centre_pk))
         return Response(children)
 
@@ -43,6 +49,13 @@ class ChildViewSet(viewsets.ViewSet):
         centre_pk = self.kwargs.get('centre_pk')
         if centre_pk and child.get('centre_id') != str(centre_pk):
             return Response({'detail': 'Child not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        centre_id = child.get('centre_id')
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_view(centre_id, 'children.view_info'):
+            return permission_denied()
         return Response(child)
 
     def create(self, request, *args, **kwargs):
@@ -71,6 +84,12 @@ class ChildViewSet(viewsets.ViewSet):
                 {'centre': ['Centre is required.']},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(data['centre_id']):
+            return centre_not_found()
+        if not access.can_edit(data['centre_id'], 'children.add'):
+            return permission_denied()
 
         # Validate date_of_birth and start_date
         dob_str = data.get('date_of_birth')
@@ -106,6 +125,13 @@ class ChildViewSet(viewsets.ViewSet):
         if centre_pk and child.get('centre_id') != str(centre_pk):
             return Response({'detail': 'Child not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        centre_id = child.get('centre_id')
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_edit(centre_id, 'children.view_info'):
+            return permission_denied()
+
         data = request.data.copy()
         if 'centre' in data:
             data['centre_id'] = data.pop('centre')
@@ -125,6 +151,13 @@ class ChildViewSet(viewsets.ViewSet):
         centre_pk = self.kwargs.get('centre_pk')
         if centre_pk and child.get('centre_id') != str(centre_pk):
             return Response({'detail': 'Child not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        centre_id = child.get('centre_id')
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_edit(centre_id, 'children.view_info'):
+            return permission_denied()
 
         # Cascade: delete related records to prevent orphans
         # Contacts
@@ -147,6 +180,14 @@ class ChildViewSet(viewsets.ViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def _child_centre_id(child_id):
+    """Resolve the centre a child belongs to, for scope/permission checks."""
+    if not child_id:
+        return None
+    child = children_db.get_child(str(child_id))
+    return child.get('centre_id') if child else None
+
+
 class ContactViewSet(viewsets.ViewSet):
     serializer_class = ContactSerializer
     permission_classes = [IsAuthenticated, IsApprovedUser]
@@ -155,6 +196,12 @@ class ContactViewSet(viewsets.ViewSet):
         child_pk = self.kwargs.get('child_pk')
         if not child_pk:
             return Response([])
+        centre_id = _child_centre_id(child_pk)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_view(centre_id, 'children.view_info'):
+            return permission_denied()
         contacts = children_db.list_contacts(str(child_pk))
         return Response(contacts)
 
@@ -165,12 +212,26 @@ class ContactViewSet(viewsets.ViewSet):
         child_pk = self.kwargs.get('child_pk')
         if child_pk and contact.get('child_id') != str(child_pk):
             return Response({'detail': 'Contact not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        centre_id = _child_centre_id(contact.get('child_id'))
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_view(centre_id, 'children.view_info'):
+            return permission_denied()
         return Response(contact)
 
     def create(self, request, *args, **kwargs):
         child_pk = self.kwargs.get('child_pk')
         if not child_pk:
             return Response({'detail': 'A child is required to create a contact.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        centre_id = _child_centre_id(child_pk)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_edit(centre_id, 'children.manage_contacts'):
+            return permission_denied()
 
         data = request.data.copy()
 
@@ -194,6 +255,14 @@ class ContactViewSet(viewsets.ViewSet):
         child_pk = self.kwargs.get('child_pk')
         if child_pk and contact.get('child_id') != str(child_pk):
             return Response({'detail': 'Contact not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        centre_id = _child_centre_id(contact.get('child_id'))
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_edit(centre_id, 'children.manage_contacts'):
+            return permission_denied()
+
         updated = children_db.update_contact(str(kwargs['pk']), request.data)
         return Response(updated)
 
@@ -205,6 +274,14 @@ class ContactViewSet(viewsets.ViewSet):
         child_pk = self.kwargs.get('child_pk')
         if child_pk and contact.get('child_id') != str(child_pk):
             return Response({'detail': 'Contact not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        centre_id = _child_centre_id(contact.get('child_id'))
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_edit(centre_id, 'children.manage_contacts'):
+            return permission_denied()
+
         children_db.delete_contact(str(kwargs['pk']))
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -217,14 +294,28 @@ class EnrolmentViewSet(viewsets.ViewSet):
         child_pk = self.kwargs.get('child_pk')
         if not child_pk:
             return Response([])
+        centre_id = _child_centre_id(child_pk)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_view(centre_id, 'children.view_info'):
+            return permission_denied()
         enrolments = children_db.list_enrolments(str(child_pk))
         return Response(enrolments)
 
     def create(self, request, *args, **kwargs):
         data = request.data.copy()
-        child_pk = self.kwargs.get('child_pk')
+        child_pk = self.kwargs.get('child_pk') or data.get('child_id') or data.get('child')
         if child_pk:
             data['child_id'] = str(child_pk)
+
+        centre_id = _child_centre_id(child_pk) if child_pk else None
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_edit(centre_id, 'children.view_info'):
+            return permission_denied()
+
         enrolment = children_db.create_enrolment(data)
 
         child, slot, session, centre, room = _resolve_enrolment_context(enrolment)
@@ -237,12 +328,26 @@ class EnrolmentViewSet(viewsets.ViewSet):
         enrolment = children_db.get_enrolment(str(kwargs['pk']))
         if not enrolment:
             return Response({'detail': 'Enrolment not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        centre_id = _child_centre_id(enrolment.get('child_id'))
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_view(centre_id, 'children.view_info'):
+            return permission_denied()
         return Response(enrolment)
 
     def partial_update(self, request, *args, **kwargs):
         enrolment = children_db.get_enrolment(str(kwargs['pk']))
         if not enrolment:
             return Response({'detail': 'Enrolment not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        centre_id = _child_centre_id(enrolment.get('child_id'))
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_edit(centre_id, 'children.view_info'):
+            return permission_denied()
 
         new_slot_id = request.data.get('slot_id') or request.data.get('slot')
         old_slot_id = enrolment.get('slot_id') or enrolment.get('slot')
@@ -261,6 +366,13 @@ class EnrolmentViewSet(viewsets.ViewSet):
         enrolment = children_db.get_enrolment(str(kwargs['pk']))
         if not enrolment:
             return Response({'detail': 'Enrolment not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        centre_id = _child_centre_id(enrolment.get('child_id'))
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_edit(centre_id, 'children.view_info'):
+            return permission_denied()
 
         child, slot, session, centre, room = _resolve_enrolment_context(enrolment)
 

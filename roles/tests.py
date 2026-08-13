@@ -11,6 +11,8 @@ from django.test import SimpleTestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from .access import UserAccess
+
 CENTRE_ID = "22222222-2222-2222-2222-222222222222"
 ROLE_ID = "33333333-3333-3333-3333-333333333333"
 USER_ID = "55555555-5555-5555-5555-555555555555"
@@ -30,10 +32,21 @@ class FakeUser:
 
 
 class RolesAPITestCase(SimpleTestCase):
+    """Grants the acting user unrestricted access by default (root-equivalent
+    UserAccess), so these tests exercise business logic rather than the
+    permission matrix — see roles/test_access.py for that. Tests that need to
+    assert enforcement itself override self.mock_get_user_access.return_value.
+    """
+
     def setUp(self):
         self.client = APIClient()
         self.user = FakeUser()
         self.client.force_authenticate(user=self.user)
+
+        access_patcher = patch('roles.views.get_user_access')
+        self.mock_get_user_access = access_patcher.start()
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=True)
+        self.addCleanup(access_patcher.stop)
 
 
 def admin_role(role_id=ROLE_ID, centre_id=CENTRE_ID, members=None):
@@ -651,3 +664,50 @@ class RemoveMemberTests(RolesAPITestCase):
         resp = self.client.delete(f'/api/v1/roles/{ROLE_ID}/members/{USER_ID}/')
 
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+
+# =============================================================================
+# Permission-matrix enforcement (dynamic role-based access — see roles/access.py)
+# =============================================================================
+
+@patch('roles.views.roles_db')
+class RolesEnforcementTests(RolesAPITestCase):
+    """Unlike the rest of this file, these tests give the acting user a
+    restricted (non-root) UserAccess to verify the enforcement itself,
+    rather than the business logic downstream of it.
+    """
+
+    def test_list_roles_returns_404_for_centre_the_user_is_not_a_member_of(self, mock_roles_db):
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=False)
+
+        resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/roles/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        mock_roles_db.list_roles.assert_not_called()
+
+    def test_list_roles_returns_403_without_roles_manage_permission(self, mock_roles_db):
+        access = UserAccess(unrestricted=False)
+        access.centres[CENTRE_ID] = {
+            'data_scope': 'own', 'role_names': ['Teacher'], 'name': '', 'system_id': '',
+            'permissions': {},  # no roles.manage
+        }
+        self.mock_get_user_access.return_value = access
+
+        resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/roles/')
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        mock_roles_db.list_roles.assert_not_called()
+
+    def test_add_member_returns_403_without_people_manage_edit(self, mock_roles_db):
+        mock_roles_db.get_role.return_value = basic_role()
+        access = UserAccess(unrestricted=False)
+        access.centres[CENTRE_ID] = {
+            'data_scope': 'own', 'role_names': ['Teacher'], 'name': '', 'system_id': '',
+            'permissions': {'people.manage': {'visible': True, 'edit': False}},
+        }
+        self.mock_get_user_access.return_value = access
+
+        resp = self.client.post(f'/api/v1/roles/{ROLE_ID}/members/', {"user_id": OTHER_USER_ID}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        mock_roles_db.add_member.assert_not_called()
