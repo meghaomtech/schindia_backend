@@ -22,6 +22,8 @@ from django.test import SimpleTestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from roles.access import UserAccess
+
 CENTRE_ID = "22222222-2222-2222-2222-222222222222"
 SESSION_ID = "33333333-3333-3333-3333-333333333333"
 SLOT_ID = "44444444-4444-4444-4444-444444444444"
@@ -42,10 +44,21 @@ class FakeUser:
 
 
 class SessionsAPITestCase(SimpleTestCase):
+    """Grants the acting user unrestricted access by default (root-equivalent
+    UserAccess), so these tests exercise business logic rather than the
+    permission matrix — see roles/test_access.py for that. Tests that need to
+    assert enforcement itself override self.mock_get_user_access.return_value.
+    """
+
     def setUp(self):
         self.client = APIClient()
         self.user = FakeUser()
         self.client.force_authenticate(user=self.user)
+
+        access_patcher = patch('sessions_app.views.get_user_access')
+        self.mock_get_user_access = access_patcher.start()
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=True)
+        self.addCleanup(access_patcher.stop)
 
 
 # =============================================================================
@@ -569,3 +582,47 @@ class TimetableTests(SessionsAPITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(sum(len(v) for v in resp.data["timetable"].values()), 0)
+
+
+# =============================================================================
+# Permission-matrix enforcement (dynamic role-based access — see roles/access.py)
+# =============================================================================
+
+class SessionsEnforcementTests(SessionsAPITestCase):
+    """Unlike the rest of this file, these tests give the acting user a
+    restricted (non-root) UserAccess to verify the enforcement itself,
+    rather than the business logic downstream of it. Sessions/timetables are
+    only centre-scoped (no per-key view/edit matrix yet — see the plan).
+    """
+
+    @patch('sessions_app.views.sessions_db')
+    def test_list_sessions_returns_404_for_centre_the_user_is_not_a_member_of(self, mock_sessions_db):
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=False)
+
+        resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/sessions/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        mock_sessions_db.list_sessions.assert_not_called()
+
+    @patch('sessions_app.views.sessions_db')
+    def test_list_sessions_succeeds_for_a_member(self, mock_sessions_db):
+        access = UserAccess(unrestricted=False)
+        access.centres[CENTRE_ID] = {
+            'data_scope': 'own', 'role_names': ['Teacher'], 'name': '', 'system_id': '', 'permissions': {},
+        }
+        self.mock_get_user_access.return_value = access
+        mock_sessions_db.list_sessions.return_value = []
+
+        resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/sessions/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_sessions_db.list_sessions.assert_called_once_with(CENTRE_ID)
+
+    @patch('dynamo_backend.services.centres_db')
+    def test_timetable_returns_404_for_centre_the_user_is_not_a_member_of(self, mock_centres_db):
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=False)
+
+        resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/timetable/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        mock_centres_db.get_centre.assert_not_called()
