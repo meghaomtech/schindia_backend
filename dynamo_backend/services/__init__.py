@@ -5,6 +5,8 @@ from .children_service import ChildrenDynamoService
 from .billing_service import BillingDynamoService
 from .progress_service import ProgressDynamoService
 from .roles_service import RolesDynamoService
+from .global_access_service import GlobalAccessDynamoService
+from .catalogue_service import CatalogueDynamoService
 from .otp_service import OtpDynamoService
 from .root_access_service import RootAccessDynamoService
 from .blacklist_service import BlacklistDynamoService
@@ -17,6 +19,8 @@ children_db = ChildrenDynamoService()
 billing_db = BillingDynamoService()
 progress_db = ProgressDynamoService()
 roles_db = RolesDynamoService()
+global_access_db = GlobalAccessDynamoService()
+catalogue_db = CatalogueDynamoService()
 otp_db = OtpDynamoService()
 root_access_db = RootAccessDynamoService()
 blacklist_db = BlacklistDynamoService()

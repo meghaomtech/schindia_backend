@@ -16,6 +16,9 @@ from .tables import (
     ENROLMENTS_TABLE, JOURNEY_TABLE, NOTES_TABLE,
     INVOICES_TABLE, INVOICE_ITEMS_TABLE, PURCHASES_TABLE,
     ROLES_TABLE, ROLE_PERMISSIONS_TABLE, ROLE_MEMBERS_TABLE,
+    GLOBAL_ROLES_TABLE, GLOBAL_ROLE_PERMISSIONS_TABLE,
+    GLOBAL_PEOPLE_TABLE, GLOBAL_ASSIGNMENTS_TABLE,
+    CATALOGUE_ITEMS_TABLE, DISCOUNT_RULES_TABLE,
     ATTENDANCE_TABLE, COURSE_PROGRESS_TABLE,
     OTP_TOKENS_TABLE, ROOT_ACCESS_REQUESTS_TABLE, JWT_BLACKLIST_TABLE,
 )
@@ -284,6 +287,90 @@ TABLE_DEFINITIONS = [
                 'KeySchema': [{'AttributeName': 'user_id', 'KeyType': 'HASH'}],
                 'Projection': {'ProjectionType': 'ALL'},
             },
+        ],
+    },
+    # Global (org-wide) roles & permissions
+    {
+        'TableName': GLOBAL_ROLES_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+        ],
+    },
+    {
+        'TableName': GLOBAL_ROLE_PERMISSIONS_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+            {'AttributeName': 'role_id', 'AttributeType': 'S'},
+        ],
+        'GlobalSecondaryIndexes': [
+            {
+                'IndexName': 'role_id-index',
+                'KeySchema': [{'AttributeName': 'role_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            }
+        ],
+    },
+    {
+        'TableName': GLOBAL_PEOPLE_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+        ],
+    },
+    {
+        'TableName': GLOBAL_ASSIGNMENTS_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+            {'AttributeName': 'role_id', 'AttributeType': 'S'},
+            {'AttributeName': 'person_id', 'AttributeType': 'S'},
+        ],
+        'GlobalSecondaryIndexes': [
+            {
+                'IndexName': 'role_id-index',
+                'KeySchema': [{'AttributeName': 'role_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            },
+            {
+                'IndexName': 'person_id-index',
+                'KeySchema': [{'AttributeName': 'person_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            },
+        ],
+    },
+    # Product catalogue & discount rules
+    {
+        'TableName': CATALOGUE_ITEMS_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+            {'AttributeName': 'centre_id', 'AttributeType': 'S'},
+        ],
+        'GlobalSecondaryIndexes': [
+            {
+                # Sparse index: global items (no centre_id) simply don't
+                # appear here — only used to look up one centre's own additions.
+                'IndexName': 'centre_id-index',
+                'KeySchema': [{'AttributeName': 'centre_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            }
+        ],
+    },
+    {
+        'TableName': DISCOUNT_RULES_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+            {'AttributeName': 'centre_id', 'AttributeType': 'S'},
+        ],
+        'GlobalSecondaryIndexes': [
+            {
+                'IndexName': 'centre_id-index',
+                'KeySchema': [{'AttributeName': 'centre_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            }
         ],
     },
     # New Phase 2 tables

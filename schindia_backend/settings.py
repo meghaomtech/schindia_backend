@@ -51,6 +51,8 @@ INSTALLED_APPS = [
     'progress',
     'billing',
     'roles',
+    'global_access',
+    'catalogue',
 ]
 
 MIDDLEWARE = [
