@@ -6,70 +6,44 @@ class UserSerializer(serializers.Serializer):
     """Serializes a DynamoUser (request.user) into the API user shape."""
 
     def to_representation(self, instance):
+        from roles.access import get_user_access
+        access = get_user_access(instance)
+
         return {
             'id': instance.id,
             'name': instance.get_full_name(),
             'email': instance.email,
             'role': instance.role,
             'status': instance.status,
-            'permissions': self.get_permissions(instance),
-            'centres': self.get_centres(instance),
+            'permissions': self.get_permissions(access),
+            'centres': self.get_centres(access),
             'requested_at': instance.requested_at,
         }
 
-    def get_permissions(self, obj):
+    def get_permissions(self, access):
         """Return all permissions grouped by centre for permission-based routing (Req 24)."""
-        from dynamo_backend.services import roles_db, centres_db
-        user_id = str(obj.id)
-
-        centres = centres_db.list_centres()
         result = {}
-        for centre in centres:
-            cid = centre['id']
-            roles = roles_db.list_roles(cid)
-            for role in roles:
-                members = role.get('members', [])
-                user_is_member = any(m.get('user_id') == user_id for m in members)
-                if user_is_member:
-                    if cid not in result:
-                        result[cid] = {
-                            'roles': [],
-                            'data_scope': role.get('data_scope', 'own'),
-                            'permissions': [],
-                        }
-                    result[cid]['roles'].append(role.get('name', ''))
-                    if role.get('data_scope') == 'all':
-                        result[cid]['data_scope'] = 'all'
-                    for perm in role.get('permissions', []):
-                        if perm.get('visible', True):
-                            key = perm.get('key', '')
-                            if key and key not in result[cid]['permissions']:
-                                result[cid]['permissions'].append(key)
+        for centre_id, centre_access in access.centres.items():
+            result[centre_id] = {
+                'roles': centre_access['role_names'],
+                'data_scope': centre_access['data_scope'],
+                'permissions': [
+                    key for key, flags in centre_access['permissions'].items()
+                    if flags.get('visible', True)
+                ],
+            }
         return result
 
-    def get_centres(self, obj):
+    def get_centres(self, access):
         """Return list of centres the user has access to (Req 24.3)."""
-        from dynamo_backend.services import roles_db, centres_db
-        user_id = str(obj.id)
-
-        centres = centres_db.list_centres()
-        result = []
-        seen = set()
-        for centre in centres:
-            cid = centre['id']
-            roles = roles_db.list_roles(cid)
-            for role in roles:
-                members = role.get('members', [])
-                if any(m.get('user_id') == user_id for m in members):
-                    if cid not in seen:
-                        seen.add(cid)
-                        result.append({
-                            'id': cid,
-                            'name': centre.get('name', ''),
-                            'system_id': centre.get('system_id', ''),
-                        })
-                    break
-        return result
+        return [
+            {
+                'id': centre_id,
+                'name': centre_access['name'],
+                'system_id': centre_access['system_id'],
+            }
+            for centre_id, centre_access in access.centres.items()
+        ]
 
 
 class RequestAccessSerializer(serializers.Serializer):

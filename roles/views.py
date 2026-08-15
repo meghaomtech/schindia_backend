@@ -11,6 +11,7 @@ from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import roles_db, centres_db, auth_db
 from notifications.mailer import send_permission_updated_email
 from .permissions_catalog import PERMISSION_CATEGORIES
+from .access import get_user_access, centre_not_found, permission_denied
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,11 @@ class RoleViewSet(viewsets.ViewSet):
         centre_pk = self.kwargs.get('centre_pk')
         if not centre_pk:
             return Response([])
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_pk):
+            return centre_not_found()
+        if not access.can_view(centre_pk, 'roles.manage'):
+            return permission_denied()
         roles = roles_db.list_roles(str(centre_pk))
         return Response(roles)
 
@@ -41,12 +47,25 @@ class RoleViewSet(viewsets.ViewSet):
         centre_pk = self.kwargs.get('centre_pk')
         if centre_pk and role.get('centre_id') != str(centre_pk):
             return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        centre_id = role.get('centre_id')
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_view(centre_id, 'roles.manage'):
+            return permission_denied()
         return Response(role)
 
     def create(self, request, *args, **kwargs):
         centre_pk = self.kwargs.get('centre_pk')
         if not centre_pk:
             return Response({'detail': 'A centre is required to create a role.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_pk):
+            return centre_not_found()
+        if not access.can_edit(centre_pk, 'roles.manage'):
+            return permission_denied()
 
         data = request.data.copy()
         data.pop('centre', None)
@@ -92,6 +111,13 @@ class RoleViewSet(viewsets.ViewSet):
         if centre_pk and role.get('centre_id') != str(centre_pk):
             return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        centre_id = role.get('centre_id')
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_edit(centre_id, 'roles.manage'):
+            return permission_denied()
+
         # If renaming, check for duplicate name
         data = request.data.copy()
         new_name = data.get('name', '').strip()
@@ -128,6 +154,13 @@ class RoleViewSet(viewsets.ViewSet):
         centre_pk = self.kwargs.get('centre_pk')
         if centre_pk and role.get('centre_id') != str(centre_pk):
             return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        centre_id = role.get('centre_id')
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            return centre_not_found()
+        if not access.can_edit(centre_id, 'roles.manage'):
+            return permission_denied()
 
         # Req 15.10: cannot delete if has members
         if role.get('members'):
@@ -172,6 +205,12 @@ def centre_people(request, centre_pk):
     Returns a flat list with user info and their role.
     Matches frontend's People tab in Roles & Permissions page (Req 14).
     """
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_pk):
+        return centre_not_found()
+    if not access.can_view(centre_pk, 'people.manage'):
+        return permission_denied()
+
     roles = roles_db.list_roles(str(centre_pk))
 
     people = []
@@ -223,6 +262,12 @@ def permissions_matrix(request, centre_pk):
     Return the full permissions matrix for a centre (Req 16).
     Roles as columns, permissions as rows grouped by module.
     """
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_pk):
+        return centre_not_found()
+    if not access.can_view(centre_pk, 'roles.manage'):
+        return permission_denied()
+
     centre = centres_db.get_centre(str(centre_pk))
     if not centre:
         return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -260,6 +305,12 @@ def save_permissions_matrix(request, centre_pk):
     Expected body: { "role_id": { "key": {"visible": bool, "edit": bool}, ... }, ... }
     Enforces Req 16.7: at least one role must retain people.manage + roles.manage.
     """
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_pk):
+        return centre_not_found()
+    if not access.can_edit(centre_pk, 'roles.manage'):
+        return permission_denied()
+
     data = request.data  # { role_id: { key: {visible, edit} } }
 
     # Validate: at least one role must keep people.manage + roles.manage
@@ -307,6 +358,14 @@ def update_permission(request, role_pk, key):
     role = roles_db.get_role(str(role_pk))
     if not role:
         return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    centre_id = role.get('centre_id')
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_id):
+        return centre_not_found()
+    if not access.can_edit(centre_id, 'roles.manage'):
+        return permission_denied()
+
     result = roles_db.update_permission(str(role_pk), key, request.data)
     _notify_permission_changes(role_pk, [(key, result)])
     return Response(result)
@@ -322,6 +381,13 @@ def add_member(request, role_pk):
     role = roles_db.get_role(str(role_pk))
     if not role:
         return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    centre_id = role.get('centre_id')
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_id):
+        return centre_not_found()
+    if not access.can_edit(centre_id, 'people.manage'):
+        return permission_denied()
 
     user_id = request.data.get('user') or request.data.get('user_id') or request.data.get('id')
     name = request.data.get('name', '')
@@ -378,6 +444,13 @@ def resend_invite(request, role_pk, user_pk):
     if not role:
         return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+    centre_id = role.get('centre_id')
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_id):
+        return centre_not_found()
+    if not access.can_edit(centre_id, 'people.manage'):
+        return permission_denied()
+
     member = next(
         (m for m in role.get('members', []) if m.get('user_id') == str(user_pk)),
         None
@@ -406,6 +479,13 @@ def remove_member(request, role_pk, user_pk):
     role = roles_db.get_role(str(role_pk))
     if not role:
         return Response({'detail': 'Role not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    centre_id = role.get('centre_id')
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_id):
+        return centre_not_found()
+    if not access.can_edit(centre_id, 'people.manage'):
+        return permission_denied()
 
     # Check if this is the last member with admin permissions (Req 14.10-11)
     admin_keys = {'people.manage', 'roles.manage'}

@@ -84,6 +84,9 @@ class BillingDynamoService:
         return self.invoice_items.query_by_index('invoice_id-index', 'invoice_id', str(invoice_id))
 
     # Purchase CRUD
+    def get_purchase(self, purchase_id):
+        return self.purchases.get(str(purchase_id))
+
     def list_purchases(self, child_id):
         return self.purchases.query_by_index('child_id-index', 'child_id', str(child_id))
 

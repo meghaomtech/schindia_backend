@@ -12,6 +12,8 @@ from django.test import SimpleTestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from roles.access import UserAccess
+
 CENTRE_ID = "22222222-2222-2222-2222-222222222222"
 CHILD_ID = "11111111-1111-1111-1111-111111111111"
 CONTACT_ID = "88888888-8888-8888-8888-888888888888"
@@ -45,10 +47,21 @@ class FakeUser:
 
 
 class ChildrenAPITestCase(SimpleTestCase):
+    """Grants the acting user unrestricted access by default (root-equivalent
+    UserAccess), so these tests exercise business logic rather than the
+    permission matrix — see roles/test_access.py for that. Tests that need to
+    assert enforcement itself override self.mock_get_user_access.return_value.
+    """
+
     def setUp(self):
         self.client = APIClient()
         self.user = FakeUser()
         self.client.force_authenticate(user=self.user)
+
+        access_patcher = patch('children.views.get_user_access')
+        self.mock_get_user_access = access_patcher.start()
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=True)
+        self.addCleanup(access_patcher.stop)
 
 
 # =============================================================================
@@ -638,7 +651,9 @@ class EnrolmentDestroyEmailHookTests(ChildrenAPITestCase):
 
         self.client.delete(f'/api/v1/children/{CHILD_ID}/enrolments/{ENROLMENT_ID}/')
 
-        mock_children_db.get_child.assert_called_once_with(CHILD_ID)
+        # Called once for the centre-scope check and again to resolve the
+        # notification context — both before delete_enrolment runs.
+        mock_children_db.get_child.assert_any_call(CHILD_ID)
         mock_children_db.delete_enrolment.assert_called_once_with(ENROLMENT_ID)
 
     def test_destroy_with_unresolvable_child_sends_no_email(
@@ -701,7 +716,9 @@ class EnrolmentSlotChangeEmailHookTests(ChildrenAPITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         mock_send_enrolment_removed_email.assert_not_called()
-        mock_children_db.get_child.assert_not_called()
+        # get_child IS called once, for the centre-scope check — but slot didn't
+        # change, so _resolve_enrolment_context's extra lookup is skipped.
+        mock_children_db.get_child.assert_called_once_with(CHILD_ID)
 
     def test_unrelated_field_update_sends_no_email(
         self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_removed_email
@@ -713,3 +730,66 @@ class EnrolmentSlotChangeEmailHookTests(ChildrenAPITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         mock_send_enrolment_removed_email.assert_not_called()
+
+
+# =============================================================================
+# Permission-matrix enforcement (dynamic role-based access — see roles/access.py)
+# =============================================================================
+
+class ChildEnforcementTests(ChildrenAPITestCase):
+    """Unlike the rest of this file, these tests give the acting user a
+    restricted (non-root) UserAccess to verify the enforcement itself,
+    rather than the business logic downstream of it.
+    """
+
+    @patch('children.views.children_db')
+    def test_list_returns_404_for_centre_the_user_is_not_a_member_of(self, mock_children_db):
+        self.mock_get_user_access.return_value = UserAccess(unrestricted=False)
+
+        resp = self.client.get(f'/api/v1/children/?centre={CENTRE_ID}')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        mock_children_db.list_children.assert_not_called()
+
+    @patch('children.views.children_db')
+    def test_list_returns_403_when_member_lacks_view_permission(self, mock_children_db):
+        access = UserAccess(unrestricted=False)
+        access.centres[CENTRE_ID] = {
+            'data_scope': 'own', 'role_names': ['Teacher'], 'name': '', 'system_id': '',
+            'permissions': {},  # no children.view_info
+        }
+        self.mock_get_user_access.return_value = access
+
+        resp = self.client.get(f'/api/v1/children/?centre={CENTRE_ID}')
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        mock_children_db.list_children.assert_not_called()
+
+    @patch('children.views.children_db')
+    def test_list_succeeds_when_member_has_view_permission(self, mock_children_db):
+        access = UserAccess(unrestricted=False)
+        access.centres[CENTRE_ID] = {
+            'data_scope': 'own', 'role_names': ['Teacher'], 'name': '', 'system_id': '',
+            'permissions': {'children.view_info': {'visible': True, 'edit': False}},
+        }
+        self.mock_get_user_access.return_value = access
+        mock_children_db.list_children.return_value = []
+
+        resp = self.client.get(f'/api/v1/children/?centre={CENTRE_ID}')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        mock_children_db.list_children.assert_called_once_with(CENTRE_ID)
+
+    @patch('children.views.children_db')
+    def test_create_returns_403_when_member_can_view_but_not_add(self, mock_children_db):
+        access = UserAccess(unrestricted=False)
+        access.centres[CENTRE_ID] = {
+            'data_scope': 'own', 'role_names': ['Teacher'], 'name': '', 'system_id': '',
+            'permissions': {'children.view_info': {'visible': True, 'edit': False}},
+        }
+        self.mock_get_user_access.return_value = access
+
+        resp = self.client.post('/api/v1/children/', {**VALID_CHILD_PAYLOAD, "centre": CENTRE_ID}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        mock_children_db.create_child.assert_not_called()

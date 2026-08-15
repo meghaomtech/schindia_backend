@@ -7,6 +7,7 @@ from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import sessions_db, centres_db, children_db, progress_db
+from roles.access import get_user_access, centre_not_found
 from .serializers import SessionSerializer, SessionSlotSerializer, GenerateSlotsSerializer, SlotAttendanceMarkSerializer
 
 
@@ -23,25 +24,31 @@ class SessionViewSet(viewsets.ViewSet):
     serializer_class = SessionSerializer
 
     def list(self, request, *args, **kwargs):
-        centre_pk = self.kwargs.get('centre_pk')
-        if centre_pk:
-            sessions = sessions_db.list_sessions(str(centre_pk))
-        else:
-            # Standalone: check query param
-            centre_id = request.query_params.get('centre')
-            sessions = sessions_db.list_sessions(str(centre_id)) if centre_id else []
+        centre_pk = self.kwargs.get('centre_pk') or request.query_params.get('centre')
+        if not centre_pk:
+            return Response([])
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_pk):
+            return centre_not_found()
+        sessions = sessions_db.list_sessions(str(centre_pk))
         return Response(sessions)
 
     def retrieve(self, request, *args, **kwargs):
         session = sessions_db.get_session(str(kwargs['pk']))
         if not session:
             return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(session.get('centre_id')):
+            return centre_not_found('Session not found.')
         return Response(session)
 
     def create(self, request, *args, **kwargs):
         centre_pk = self.kwargs.get('centre_pk')
         if not centre_pk:
             return Response({'detail': 'A centre is required to create a session.'}, status=status.HTTP_400_BAD_REQUEST)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_pk):
+            return centre_not_found()
 
         from .serializers import get_next_color
 
@@ -109,6 +116,10 @@ class SessionViewSet(viewsets.ViewSet):
         if centre_pk and session.get('centre_id') != str(centre_pk):
             return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(session.get('centre_id')):
+            return centre_not_found('Session not found.')
+
         updated = sessions_db.update_session(str(kwargs['pk']), request.data)
         return Response(updated)
 
@@ -121,6 +132,10 @@ class SessionViewSet(viewsets.ViewSet):
         centre_pk = self.kwargs.get('centre_pk')
         if centre_pk and session.get('centre_id') != str(centre_pk):
             return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(session.get('centre_id')):
+            return centre_not_found('Session not found.')
 
         # Check for dependent slots (same guard as Room deletion — Req 5.7)
         centre_id = session.get('centre_id', str(centre_pk) if centre_pk else '')
@@ -142,29 +157,32 @@ class SessionSlotViewSet(viewsets.ViewSet):
     serializer_class = SessionSlotSerializer
 
     def list(self, request, *args, **kwargs):
-        centre_pk = self.kwargs.get('centre_pk')
-        if centre_pk:
-            week = request.query_params.get('week')
-            slots = sessions_db.list_slots(str(centre_pk), week)
-        else:
-            centre_id = request.query_params.get('centre')
-            if centre_id:
-                week = request.query_params.get('week')
-                slots = sessions_db.list_slots(str(centre_id), week)
-            else:
-                slots = []
+        centre_pk = self.kwargs.get('centre_pk') or request.query_params.get('centre')
+        if not centre_pk:
+            return Response([])
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_pk):
+            return centre_not_found()
+        week = request.query_params.get('week')
+        slots = sessions_db.list_slots(str(centre_pk), week)
         return Response(slots)
 
     def retrieve(self, request, *args, **kwargs):
         slot = sessions_db.get_slot(str(kwargs['pk']))
         if not slot:
             return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(slot.get('centre_id')):
+            return centre_not_found('Slot not found.')
         return Response(slot)
 
     def create(self, request, *args, **kwargs):
         centre_pk = self.kwargs.get('centre_pk')
         if not centre_pk:
             return Response({'detail': 'A centre is required to create a slot.'}, status=status.HTTP_400_BAD_REQUEST)
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_pk):
+            return centre_not_found()
 
         data = request.data.copy()
 
@@ -206,6 +224,10 @@ class SessionSlotViewSet(viewsets.ViewSet):
         if centre_pk and slot.get('centre_id') != str(centre_pk):
             return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(slot.get('centre_id')):
+            return centre_not_found('Slot not found.')
+
         updated = sessions_db.update_slot(str(kwargs['pk']), request.data)
         return Response(updated)
 
@@ -219,6 +241,10 @@ class SessionSlotViewSet(viewsets.ViewSet):
         if centre_pk and slot.get('centre_id') != str(centre_pk):
             return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(slot.get('centre_id')):
+            return centre_not_found('Slot not found.')
+
         sessions_db.delete_slot(str(kwargs['pk']))
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -227,6 +253,10 @@ class SessionSlotViewSet(viewsets.ViewSet):
 @permission_classes([IsAuthenticated, IsApprovedUser])
 def generate_slots(request, centre_pk):
     """Generate recurring weekly slots (up to 15) or a single one-off slot."""
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_pk):
+        return centre_not_found()
+
     serializer = GenerateSlotsSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     data = serializer.validated_data
@@ -272,6 +302,10 @@ def slot_attendance(request, centre_pk, slot_pk):
     if not slot or slot.get('centre_id') != str(centre_pk):
         return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_pk):
+        return centre_not_found('Slot not found.')
+
     att_date = request.query_params.get('date') or date.today().isoformat()
     session = sessions_db.get_session(slot.get('session_id')) or {}
 
@@ -312,6 +346,10 @@ def mark_slot_attendance(request, centre_pk, slot_pk):
     if not slot or slot.get('centre_id') != str(centre_pk):
         return Response({'detail': 'Slot not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_pk):
+        return centre_not_found('Slot not found.')
+
     serializer = SlotAttendanceMarkSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     data = serializer.validated_data
@@ -349,6 +387,10 @@ def timetable(request, centre_pk):
     Returns slots grouped by day with room info, session info,
     enrolled children count, and course progress.
     """
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_pk):
+        return centre_not_found()
+
     week_param = request.query_params.get('week')
     if week_param:
         try:
