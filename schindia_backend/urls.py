@@ -10,6 +10,8 @@ urlpatterns = [
     path('api/v1/', include('progress.urls')),
     path('api/v1/', include('billing.urls')),
     path('api/v1/', include('roles.urls')),
+    path('api/v1/', include('global_access.urls')),
+    path('api/v1/', include('catalogue.urls')),
     # Dashboard / Info
     path('api/v1/info/', info_dashboard, name='info-dashboard'),
     # Legacy endpoints for invoice generator (matches old Lambda paths)

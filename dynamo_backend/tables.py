@@ -25,6 +25,16 @@ PURCHASES_TABLE = f"{PREFIX}-Purchases"
 ROLES_TABLE = f"{PREFIX}-Roles"
 ROLE_PERMISSIONS_TABLE = f"{PREFIX}-RolePermissions"
 ROLE_MEMBERS_TABLE = f"{PREFIX}-RoleMembers"
+# Global (org-wide) roles & permissions — see global_access app. Distinct from
+# ROLES_TABLE above, which holds centre-scoped role templates.
+GLOBAL_ROLES_TABLE = f"{PREFIX}-GlobalRoles"
+GLOBAL_ROLE_PERMISSIONS_TABLE = f"{PREFIX}-GlobalRolePermissions"
+GLOBAL_PEOPLE_TABLE = f"{PREFIX}-GlobalPeople"
+GLOBAL_ASSIGNMENTS_TABLE = f"{PREFIX}-GlobalAssignments"
+# Product catalogue & discount rules — see catalogue app. `centre_id` is
+# absent on global (org-wide) rows and set on centre-specific additions.
+CATALOGUE_ITEMS_TABLE = f"{PREFIX}-CatalogueItems"
+DISCOUNT_RULES_TABLE = f"{PREFIX}-DiscountRules"
 ATTENDANCE_TABLE = f"{PREFIX}-Attendance"
 COURSE_PROGRESS_TABLE = f"{PREFIX}-CourseProgress"
 OTP_TOKENS_TABLE = f"{PREFIX}-OtpTokens"
@@ -48,6 +58,12 @@ ALL_TABLES = {
     'roles': ROLES_TABLE,
     'role_permissions': ROLE_PERMISSIONS_TABLE,
     'role_members': ROLE_MEMBERS_TABLE,
+    'global_roles': GLOBAL_ROLES_TABLE,
+    'global_role_permissions': GLOBAL_ROLE_PERMISSIONS_TABLE,
+    'global_people': GLOBAL_PEOPLE_TABLE,
+    'global_assignments': GLOBAL_ASSIGNMENTS_TABLE,
+    'catalogue_items': CATALOGUE_ITEMS_TABLE,
+    'discount_rules': DISCOUNT_RULES_TABLE,
     'attendance': ATTENDANCE_TABLE,
     'course_progress': COURSE_PROGRESS_TABLE,
     'otp_tokens': OTP_TOKENS_TABLE,
