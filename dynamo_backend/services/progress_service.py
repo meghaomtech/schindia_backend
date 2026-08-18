@@ -171,6 +171,29 @@ class ProgressDynamoService:
                 'created_at': note.get('created_at', ''),
             })
 
+        # Enrolments
+        try:
+            from .children_service import ChildrenDynamoService
+            from .sessions_service import SessionsDynamoService
+            children_svc = ChildrenDynamoService()
+            sessions_svc = SessionsDynamoService()
+            for enr in children_svc.list_enrolments(child_id):
+                session_name = enr.get('session_name')
+                if not session_name and enr.get('slot_id'):
+                    slot = sessions_svc.get_slot(enr['slot_id'])
+                    if slot and slot.get('session_id'):
+                        sess = sessions_svc.get_session(slot['session_id'])
+                        if sess:
+                            session_name = sess.get('name')
+                activities.append({
+                    'type': 'enrolment',
+                    'date': enr.get('start_date', ''),
+                    'text': f"Enrolled in {session_name or 'session'}",
+                    'created_at': enr.get('created_at', ''),
+                })
+        except Exception:
+            pass
+
         # Sort by (date, created_at) descending for stable ordering
         activities.sort(
             key=lambda x: (x.get('date') or '', x.get('created_at') or ''),
