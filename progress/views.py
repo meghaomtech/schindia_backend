@@ -6,7 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
-from dynamo_backend.services import progress_db, children_db, centres_db, sessions_db
+from dynamo_backend.services import progress_db, children_db, centres_db, sessions_db, auth_db
 from billing.notifications import send_milestone_notification, send_attendance_notification
 from roles.access import get_user_access, centre_not_found
 from .serializers import (
@@ -206,7 +206,8 @@ class AttendanceViewSet(viewsets.ViewSet):
                 )
 
         data['marked_by_id'] = str(request.user.id)
-        data['marked_by_name'] = request.user.get_full_name() or request.user.email
+        full_name = request.user.get_full_name() if hasattr(request.user, 'get_full_name') else f"{getattr(request.user, 'first_name', '')} {getattr(request.user, 'last_name', '')}".strip()
+        data['marked_by_name'] = full_name or getattr(request.user, 'email', 'staff')
         data['marked_at'] = datetime.utcnow().isoformat()
 
         record = progress_db.create_attendance(str(child_pk), data)
@@ -219,7 +220,16 @@ class AttendanceViewSet(viewsets.ViewSet):
 
             session = sessions_db.get_session(str(session_id)) if session_id else None
 
-            send_attendance_notification(record, child, session=session, teacher_name=data['marked_by_name'])
+            teacher_id = data.get('teacher_id') or data.get('teacher')
+            teacher_name = None
+            if teacher_id:
+                teacher_user = auth_db.get_user_by_id(str(teacher_id))
+                if teacher_user:
+                    teacher_name = f"{teacher_user.get('first_name', '')} {teacher_user.get('last_name', '')}".strip()
+            if not teacher_name:
+                teacher_name = "Unknown"
+
+            send_attendance_notification(record, child, session=session, teacher_name=teacher_name)
 
         return Response(record, status=status.HTTP_201_CREATED)
 
@@ -330,6 +340,20 @@ def child_activity_feed(request, child_pk):
         'text': f"Joined {centre_name}",
         'created_at': child.get('created_at', ''),
     })
+
+    # If child has an assigned session and not already logged
+    if child.get('session_id'):
+        has_enrolment = any(a.get('type') == 'enrolment' for a in activities)
+        if not has_enrolment:
+            sess = sessions_db.get_session(str(child['session_id']))
+            sess_name = sess.get('name') if sess else 'session'
+            activities.append({
+                'type': 'enrolment',
+                'date': reg_date,
+                'text': f"Enrolled in {sess_name}",
+                'created_at': child.get('created_at', ''),
+            })
+
     activities.sort(key=lambda x: x.get('date') or '', reverse=True)
     return Response(activities)
 
