@@ -14,7 +14,7 @@ from .tables import (
     USERS_TABLE, CENTRES_TABLE, ROOMS_TABLE, SESSIONS_TABLE,
     SESSION_SLOTS_TABLE, CHILDREN_TABLE, CONTACTS_TABLE,
     ENROLMENTS_TABLE, JOURNEY_TABLE, NOTES_TABLE,
-    INVOICES_TABLE, INVOICE_ITEMS_TABLE, PURCHASES_TABLE,
+    INVOICES_TABLE, INVOICE_ITEMS_TABLE, INVOICE_LEDGER_TABLE, PURCHASES_TABLE,
     ROLES_TABLE, ROLE_PERMISSIONS_TABLE, ROLE_MEMBERS_TABLE,
     GLOBAL_ROLES_TABLE, GLOBAL_ROLE_PERMISSIONS_TABLE,
     GLOBAL_PEOPLE_TABLE, GLOBAL_ASSIGNMENTS_TABLE,
@@ -210,6 +210,21 @@ TABLE_DEFINITIONS = [
     },
     {
         'TableName': INVOICE_ITEMS_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+            {'AttributeName': 'invoice_id', 'AttributeType': 'S'},
+        ],
+        'GlobalSecondaryIndexes': [
+            {
+                'IndexName': 'invoice_id-index',
+                'KeySchema': [{'AttributeName': 'invoice_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            }
+        ],
+    },
+    {
+        'TableName': INVOICE_LEDGER_TABLE,
         'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
         'AttributeDefinitions': [
             {'AttributeName': 'id', 'AttributeType': 'S'},

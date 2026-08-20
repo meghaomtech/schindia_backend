@@ -21,6 +21,11 @@ JOURNEY_TABLE = f"{PREFIX}-Journey"
 NOTES_TABLE = f"{PREFIX}-Notes"
 INVOICES_TABLE = f"{PREFIX}-Invoices"
 INVOICE_ITEMS_TABLE = f"{PREFIX}-InvoiceItems"
+# Every act that moves money against an invoice — payment, credit note,
+# write-off, refund — in one append-only table. Kept separate from the
+# invoice so a correction never mutates the issued document, and so the
+# balance is always derivable from the trail rather than a stored figure.
+INVOICE_LEDGER_TABLE = f"{PREFIX}-InvoiceLedger"
 PURCHASES_TABLE = f"{PREFIX}-Purchases"
 ROLES_TABLE = f"{PREFIX}-Roles"
 ROLE_PERMISSIONS_TABLE = f"{PREFIX}-RolePermissions"
@@ -54,6 +59,7 @@ ALL_TABLES = {
     'notes': NOTES_TABLE,
     'invoices': INVOICES_TABLE,
     'invoice_items': INVOICE_ITEMS_TABLE,
+    'invoice_ledger': INVOICE_LEDGER_TABLE,
     'purchases': PURCHASES_TABLE,
     'roles': ROLES_TABLE,
     'role_permissions': ROLE_PERMISSIONS_TABLE,

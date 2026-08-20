@@ -79,6 +79,11 @@ PERMISSION_CATEGORIES = {
         ('finance.view_invoices', 'View invoices'),
         ('finance.manage_invoices_basic', 'Manage invoices (basic)'),
         ('finance.cancel_invoices', 'Cancel invoices'),
+        # Forgiving a debt and paying money back out are different acts from
+        # cancelling a mistake, so each asks its own row — front desk can take
+        # payments all day without being able to write off or refund.
+        ('finance.write_off_invoices', 'Write off invoices'),
+        ('finance.refund_payments', 'Refund payments'),
         ('finance.edit_billing_details', 'Edit billing details'),
         ('finance.manage_bill_payer_accounts', 'Manage bill payer accounts'),
         ('finance.manage_bill_payer_payments', 'Manage bill payer payments'),

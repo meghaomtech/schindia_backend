@@ -8,8 +8,12 @@ from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import billing_db, centres_db, children_db
-from roles.access import get_user_access, centre_not_found
+from roles.access import get_user_access, centre_not_found, permission_denied
+from . import ledger
 from .notifications import send_invoice_email
+from .serializers import (
+    CancelInvoiceSerializer, CorrectionSerializer, KIND_SERIALIZERS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -417,3 +421,161 @@ def centre_payments(request, centre_pk):
 
     payments.sort(key=lambda p: p['payment_date'], reverse=True)
     return Response({'payments': payments})
+
+
+# =============================================================================
+# Ledger — recording money and corrections against an invoice
+# =============================================================================
+
+# Each act asks its own permission. Front desk take payments all day and must
+# not be able to raise, cancel, write off or refund; splitting these rows is
+# the whole point (see billing/ledger.py).
+LEDGER_PERMISSIONS = {
+    ledger.PAYMENT: 'finance.manage_bill_payer_payments',
+    ledger.CREDIT_NOTE: 'finance.manage_bill_payer_credits',
+    ledger.WRITE_OFF: 'finance.write_off_invoices',
+    ledger.REFUND: 'finance.refund_payments',
+}
+
+
+def _invoice_centre_id(invoice):
+    """An invoice is scoped by the centre of the child it belongs to."""
+    return invoice.get('centre_id') or _child_centre_id(invoice.get('child_id'))
+
+
+def _load_invoice_for(request, invoice_pk, permission):
+    """
+    Fetch an invoice and check the caller may perform `permission` at its
+    centre. Returns (invoice, centre_id, error_response).
+    """
+    invoice = billing_db.get_invoice(str(invoice_pk))
+    if not invoice:
+        return None, None, Response(
+            {'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    centre_id = _invoice_centre_id(invoice)
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_id):
+        # Not found rather than forbidden — otherwise the response confirms
+        # an invoice exists at a centre the caller cannot see.
+        return None, None, centre_not_found('Invoice not found.')
+    if not access.can_edit(centre_id, permission):
+        return None, None, permission_denied()
+    return invoice, centre_id, None
+
+
+def _balance_for(invoice):
+    return ledger.compute_balance(invoice, billing_db.list_ledger(invoice['id']))
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def invoice_ledger(request, invoice_pk):
+    """Every act recorded against this invoice, with the resulting balance."""
+    invoice, _centre_id, error = _load_invoice_for(
+        request, invoice_pk, 'finance.view_invoices')
+    if error:
+        return error
+
+    entries = billing_db.list_ledger(invoice['id'])
+    balance = ledger.compute_balance(invoice, entries)
+    return Response({
+        'invoice_id': invoice['id'],
+        'entries': sorted(entries, key=lambda e: e.get('occurred_on') or ''),
+        'balance': balance,
+    })
+
+
+def _record(request, invoice_pk, kind):
+    invoice, _centre_id, error = _load_invoice_for(
+        request, invoice_pk, LEDGER_PERMISSIONS[kind])
+    if error:
+        return error
+
+    if invoice.get('cancelled_at'):
+        return Response(
+            {'detail': 'This invoice is cancelled — nothing can be recorded against it.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    serializer_cls = KIND_SERIALIZERS[kind]
+    serializer = (serializer_cls(data=request.data, kind=kind)
+                  if serializer_cls is CorrectionSerializer
+                  else serializer_cls(data=request.data))
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+
+    # A refund can only return money that actually came in.
+    if kind == ledger.REFUND:
+        balance = _balance_for(invoice)
+        refundable = balance['paid'] - balance['refunded']
+        if data['amount'] > refundable:
+            return Response(
+                {'amount': [f'Only {refundable} was received and not already refunded.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    occurred = data.get('occurred_on')
+    entry = billing_db.add_ledger_entry(
+        invoice['id'], kind, data['amount'],
+        reason=data.get('reason', ''),
+        method=data.get('method', ''),
+        occurred_on=occurred.isoformat() if occurred else date.today().isoformat(),
+        recorded_by=str(getattr(request.user, 'id', '')),
+    )
+    return Response(
+        {'entry': entry, 'balance': _balance_for(invoice)},
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def record_payment(request, invoice_pk):
+    return _record(request, invoice_pk, ledger.PAYMENT)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def record_credit_note(request, invoice_pk):
+    return _record(request, invoice_pk, ledger.CREDIT_NOTE)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def record_write_off(request, invoice_pk):
+    return _record(request, invoice_pk, ledger.WRITE_OFF)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def record_refund(request, invoice_pk):
+    return _record(request, invoice_pk, ledger.REFUND)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def cancel_invoice(request, invoice_pk):
+    """Void an invoice. Never deletes it — the number and trail must survive."""
+    invoice, _centre_id, error = _load_invoice_for(
+        request, invoice_pk, 'finance.cancel_invoices')
+    if error:
+        return error
+
+    if invoice.get('cancelled_at'):
+        return Response(
+            {'detail': 'This invoice is already cancelled.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    serializer = CancelInvoiceSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    reason = serializer.validated_data['reason']
+    note = serializer.validated_data.get('note', '')
+
+    updated = billing_db.cancel_invoice(
+        invoice['id'],
+        reason=f"{reason}: {note}" if note else reason,
+        cancelled_by=str(getattr(request.user, 'id', '')),
+    )
+    return Response({'invoice': updated, 'balance': _balance_for(updated or invoice)})

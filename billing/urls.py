@@ -9,6 +9,14 @@ router.register(r'purchases', views.PurchaseViewSet, basename='purchase')
 urlpatterns = [
     # Must be before router.urls so 'summary' isn't matched as a pk
     path('invoices/summary/', views.invoice_summary, name='invoice-summary'),
+    # Ledger acts. Must precede router.urls, and each is its own endpoint
+    # because each asks its own permission (LEDGER_PERMISSIONS in views.py).
+    path('invoices/<uuid:invoice_pk>/ledger/', views.invoice_ledger, name='invoice-ledger'),
+    path('invoices/<uuid:invoice_pk>/payments/', views.record_payment, name='invoice-record-payment'),
+    path('invoices/<uuid:invoice_pk>/credit-notes/', views.record_credit_note, name='invoice-record-credit-note'),
+    path('invoices/<uuid:invoice_pk>/write-offs/', views.record_write_off, name='invoice-record-write-off'),
+    path('invoices/<uuid:invoice_pk>/refunds/', views.record_refund, name='invoice-record-refund'),
+    path('invoices/<uuid:invoice_pk>/cancel/', views.cancel_invoice, name='invoice-cancel'),
     path('', include(router.urls)),
     # Centre-level invoice endpoints (Req 29)
     path(

@@ -2,13 +2,16 @@
 
 import uuid
 from ..service import DynamoDBService
-from ..tables import INVOICES_TABLE, INVOICE_ITEMS_TABLE, PURCHASES_TABLE
+from ..tables import (
+    INVOICES_TABLE, INVOICE_ITEMS_TABLE, INVOICE_LEDGER_TABLE, PURCHASES_TABLE,
+)
 
 
 class BillingDynamoService:
     def __init__(self):
         self.invoices = DynamoDBService(INVOICES_TABLE)
         self.invoice_items = DynamoDBService(INVOICE_ITEMS_TABLE)
+        self.ledger = DynamoDBService(INVOICE_LEDGER_TABLE)
         self.purchases = DynamoDBService(PURCHASES_TABLE)
 
     # Invoice CRUD
@@ -100,3 +103,42 @@ class BillingDynamoService:
 
     def delete_purchase(self, purchase_id):
         return self.purchases.delete(str(purchase_id))
+
+    # ── Ledger: payments and corrections ────────────────────────────
+    # Append-only. Nothing here edits the invoice, so the issued document
+    # always reconciles to what was sent and the balance stays derivable.
+
+    def list_ledger(self, invoice_id):
+        return self.ledger.query_by_index('invoice_id-index', 'invoice_id', str(invoice_id))
+
+    def add_ledger_entry(self, invoice_id, kind, amount, reason='', method='',
+                         occurred_on=None, recorded_by=''):
+        """Record one act against an invoice (payment, credit, write-off, refund)."""
+        return self.ledger.create({
+            'id': str(uuid.uuid4()),
+            'invoice_id': str(invoice_id),
+            'kind': kind,
+            'amount': str(amount),
+            'reason': reason,
+            'method': method,
+            'occurred_on': occurred_on or '',
+            'recorded_by': recorded_by,
+        })
+
+    def get_ledger_entry(self, entry_id):
+        return self.ledger.get(str(entry_id))
+
+    def delete_ledger_entry(self, entry_id):
+        return self.ledger.delete(str(entry_id))
+
+    def cancel_invoice(self, invoice_id, reason, cancelled_by=''):
+        """
+        Void an issued invoice. Never deletes it — the number and the trail
+        have to survive, or the GST series has a hole nobody can explain.
+        """
+        from datetime import datetime
+        return self.update_invoice(str(invoice_id), {
+            'cancelled_at': datetime.utcnow().isoformat(),
+            'cancelled_reason': reason,
+            'cancelled_by': cancelled_by,
+        })
