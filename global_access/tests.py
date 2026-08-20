@@ -563,3 +563,437 @@ class UpdatePermissionTests(GlobalAccessAPITestCase):
         mock_db.update_permission.assert_called_once_with(
             ROLE_ID, 'view_all_centres', {'visible': True, 'edit': True}
         )
+
+
+# =============================================================================
+# Onboard staff wizard
+# =============================================================================
+
+CENTRE_ID = "88888888-8888-8888-8888-888888888888"
+
+
+def _profile(**overrides):
+    data = {'name': 'Anshal Aggarwal', 'email': 'anshal570@gmail.com'}
+    data.update(overrides)
+    return data
+
+
+def _payload(profile=None, assignment=None, send_invite=False):
+    return {
+        'profile': profile or _profile(),
+        'assignment': assignment or {'role_id': ROLE_ID, 'centre_id': CENTRE_ID},
+        'send_invite': send_invite,
+    }
+
+
+def centre_role(role_id='r-teacher-c1', name='Teacher', centre_id=CENTRE_ID, permissions=None):
+    """A role from the roles app — always scoped to exactly one centre."""
+    return {'id': role_id, 'name': name, 'centre_id': centre_id, 'permissions': permissions or []}
+
+
+@patch("global_access.views.auth_db")
+@patch("global_access.views.roles_db")
+@patch("global_access.views.global_access_db")
+class OnboardStaffTests(SimpleTestCase):
+    """
+    POST /api/v1/global/people/onboard/
+
+    Which table a role lives in *is* its scope: global_access roles are
+    organisation-wide, roles-app roles belong to one centre.
+    """
+
+    URL = "/api/v1/global/people/onboard/"
+
+    def setUp(self):
+        self.client = APIClient()
+        # 'admin' is unrestricted, so capability checks pass — the denial
+        # case below authenticates as 'staff' instead.
+        self.client.force_authenticate(user=FakeUser(role="admin"))
+
+    def _global(self, db, roles, people=None):
+        db.get_role.return_value = custom_role()
+        roles.get_role.return_value = None
+        db.list_people.return_value = people or []
+        db.add_person.return_value = {'id': PERSON_ID, **_profile(), 'roles': []}
+
+    def _centre(self, db, roles, people=None, role=None):
+        db.get_role.return_value = None
+        roles.get_role.return_value = role or centre_role()
+        db.list_people.return_value = people or []
+        db.add_person.return_value = {'id': PERSON_ID, **_profile(), 'roles': []}
+
+    @patch("global_access.views.send_staff_invite_email")
+    def test_creates_person_with_profile_and_centre_scope(self, invite, db, roles, auth):
+        self._centre(db, roles)
+        invite.return_value = {'sent': True, 'reason': None, 'results': []}
+
+        res = self.client.post(self.URL, _payload(
+            profile=_profile(phone='9876543210'),
+            assignment={'role_id': 'r-teacher-c1', 'centre_id': CENTRE_ID, 'includeSubCentres': True},
+            send_invite=True,
+        ), format="json")
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        _args, kwargs = db.add_person.call_args
+        self.assertEqual(kwargs['centre_id'], CENTRE_ID)
+        self.assertTrue(kwargs['include_sub_centres'])
+        # Centre roles also need membership in the roles app, which is what
+        # the per-centre permission checks actually read.
+        roles.add_member.assert_called_once()
+        invite.assert_called_once()
+
+    def test_centre_role_takes_its_centre_from_the_role(self, db, roles, auth):
+        """The client need not send centre_id — the role already knows."""
+        self._centre(db, roles)
+        res = self.client.post(self.URL, _payload(
+            assignment={'role_id': 'r-teacher-c1'}), format="json")
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(db.add_person.call_args[1]['centre_id'], CENTRE_ID)
+
+    def test_centre_mismatch_is_rejected(self, db, roles, auth):
+        """Picking a different centre must not silently reassign the role."""
+        self._centre(db, roles)
+        res = self.client.post(self.URL, _payload(
+            assignment={'role_id': 'r-teacher-c1', 'centre_id': 'other-centre'}), format="json")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('centreId', res.json())
+        db.add_person.assert_not_called()
+
+    def test_global_role_rejects_a_centre(self, db, roles, auth):
+        self._global(db, roles)
+        res = self.client.post(self.URL, _payload(
+            assignment={'role_id': ROLE_ID, 'centre_id': CENTRE_ID}), format="json")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_global_role_without_a_centre_succeeds(self, db, roles, auth):
+        self._global(db, roles)
+        res = self.client.post(self.URL, _payload(
+            assignment={'role_id': ROLE_ID}), format="json")
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertIsNone(db.add_person.call_args[1]['centre_id'])
+        # Global roles carry no centre membership.
+        roles.add_member.assert_not_called()
+
+    def test_unknown_role_is_a_404(self, db, roles, auth):
+        db.get_role.return_value = None
+        roles.get_role.return_value = None
+        db.list_people.return_value = []
+        res = self.client.post(self.URL, _payload(), format="json")
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_duplicate_email_is_rejected(self, db, roles, auth):
+        self._global(db, roles, people=[{'id': 'x', 'email': 'ANSHAL570@gmail.com', 'roles': []}])
+        res = self.client.post(self.URL, _payload(
+            assignment={'role_id': ROLE_ID}), format="json")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('email', res.json())
+
+    def test_invalid_pan_and_aadhaar_are_rejected(self, db, roles, auth):
+        self._global(db, roles)
+        for field, value in (('pan', 'NOTAPAN'), ('aadhaarNumber', '123')):
+            res = self.client.post(self.URL, _payload(
+                profile=_profile(**{field: value}),
+                assignment={'role_id': ROLE_ID}), format="json")
+            self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST, field)
+
+    def test_missing_name_uses_the_wizard_wording(self, db, roles, auth):
+        self._global(db, roles)
+        res = self.client.post(self.URL, _payload(
+            profile={'name': '   ', 'email': 'a@b.com'},
+            assignment={'role_id': ROLE_ID}), format="json")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch("global_access.capabilities.global_access_db")
+    def test_staff_without_capability_cannot_onboard(self, cap_db, db, roles, auth):
+        self._global(db, roles)
+        cap_db.list_people.return_value = []
+        cap_db.list_roles.return_value = []
+        self.client.force_authenticate(user=FakeUser(role="staff"))
+        res = self.client.post(self.URL, _payload(), format="json")
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class StaffFieldVisibilityTests(SimpleTestCase):
+    """Regulated fields must never leave the API without the capability."""
+
+    URL = "/api/v1/global/people/"
+
+    PERSON = {
+        'id': PERSON_ID, 'name': 'Priya Nair', 'email': 'priya@shichida.local',
+        'aadhaar_number': '123456789012', 'pan': 'ABCDE1234F',
+        'documents': [{'name': 'Aadhaar card', 'key': 'k'}],
+        'bank_details': {'account_number': '123456789'},
+        'roles': [],
+    }
+
+    @patch("global_access.capabilities.global_access_db")
+    @patch("global_access.views.global_access_db")
+    def test_identity_and_bank_stripped_without_capability(self, db, cap_db):
+        db.list_people.return_value = [dict(self.PERSON)]
+        db.list_roles.return_value = []
+        cap_db.list_people.return_value = []
+        cap_db.list_roles.return_value = []
+
+        client = APIClient()
+        client.force_authenticate(user=FakeUser(role="staff"))
+        person = client.get(self.URL).json()['people'][0]
+
+        # Responses go through djangorestframework_camel_case, so assertions
+        # must use camelCase — snake_case keys would pass vacuously.
+        for field in ('aadhaarNumber', 'pan', 'documents', 'bankDetails'):
+            self.assertNotIn(field, person)
+        self.assertEqual(person['name'], 'Priya Nair')
+
+    @patch("global_access.views.global_access_db")
+    def test_unrestricted_user_sees_everything(self, db):
+        db.list_people.return_value = [dict(self.PERSON)]
+        db.list_roles.return_value = []
+
+        client = APIClient()
+        client.force_authenticate(user=FakeUser(role="admin"))
+        person = client.get(self.URL).json()['people'][0]
+
+        self.assertEqual(person['pan'], 'ABCDE1234F')
+        self.assertIn('bankDetails', person)
+
+    @patch("global_access.capabilities.global_access_db")
+    @patch("global_access.views.global_access_db")
+    def test_people_can_always_see_their_own_record(self, db, cap_db):
+        db.list_people.return_value = [dict(self.PERSON)]
+        db.list_roles.return_value = []
+        cap_db.list_people.return_value = []
+        cap_db.list_roles.return_value = []
+
+        user = FakeUser(role="staff")
+        user.email = 'priya@shichida.local'
+        client = APIClient()
+        client.force_authenticate(user=user)
+        person = client.get(self.URL).json()['people'][0]
+
+        self.assertEqual(person['pan'], 'ABCDE1234F')
+        self.assertIn('bankDetails', person)
+
+
+# =============================================================================
+# Staff document upload
+# =============================================================================
+
+class StaffDocumentUploadTests(SimpleTestCase):
+    """POST /api/v1/global/people/documents/upload/"""
+
+    URL = "/api/v1/global/people/documents/upload/"
+
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(user=FakeUser(role="admin"))
+
+    def _file(self, name="aadhaar.pdf", content=b"%PDF-1.4 fake", content_type="application/pdf"):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        return SimpleUploadedFile(name, content, content_type=content_type)
+
+    @patch("global_access.views.default_storage")
+    def test_stores_the_file_and_returns_a_reference(self, storage):
+        storage.save.return_value = "staff-documents/abc/aadhaar.pdf"
+        res = self.client.post(self.URL, {'file': self._file(), 'name': 'Aadhaar card'})
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        body = res.json()
+        self.assertEqual(body['name'], 'Aadhaar card')
+        self.assertEqual(body['key'], "staff-documents/abc/aadhaar.pdf")
+        # Only the reference travels back — never the bytes.
+        self.assertNotIn('content', body)
+
+    @patch("global_access.views.default_storage")
+    def test_rejects_a_disallowed_content_type(self, storage):
+        res = self.client.post(self.URL, {
+            'file': self._file('payload.exe', b'MZ', 'application/x-msdownload'),
+        })
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        storage.save.assert_not_called()
+
+    @patch("global_access.views.default_storage")
+    def test_rejects_a_file_over_the_size_limit(self, storage):
+        from global_access.views import MAX_DOCUMENT_BYTES
+        big = self._file('big.pdf', b'x' * (MAX_DOCUMENT_BYTES + 1))
+        res = self.client.post(self.URL, {'file': big})
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        storage.save.assert_not_called()
+
+    def test_requires_a_file(self):
+        res = self.client.post(self.URL, {})
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch("global_access.capabilities.global_access_db")
+    def test_staff_without_the_identity_capability_are_refused(self, cap_db):
+        cap_db.list_people.return_value = []
+        cap_db.list_roles.return_value = []
+        self.client.force_authenticate(user=FakeUser(role="staff"))
+        res = self.client.post(self.URL, {'file': self._file()})
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    @patch("global_access.views.default_storage")
+    def test_storage_failure_is_reported_not_swallowed(self, storage):
+        storage.save.side_effect = OSError("bucket unreachable")
+        res = self.client.post(self.URL, {'file': self._file()})
+        self.assertEqual(res.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+# =============================================================================
+# Centre-scoped assignments (service layer)
+# =============================================================================
+
+class CentreScopedAssignmentTests(SimpleTestCase):
+    """
+    The same role at two different centres is legitimate, so the duplicate
+    guard must key on role *and* centre — not role alone.
+    """
+
+    def _service(self, existing):
+        from dynamo_backend.services.global_access_service import GlobalAccessDynamoService
+        svc = GlobalAccessDynamoService.__new__(GlobalAccessDynamoService)
+        svc.assignments = type('Fake', (), {
+            'create': staticmethod(lambda data: data),
+            'query_by_index': staticmethod(lambda *a, **k: existing),
+            'list_all': staticmethod(lambda: existing),
+        })()
+        return svc
+
+    def test_same_role_at_a_different_centre_is_allowed(self):
+        svc = self._service([{'role_id': 'r1', 'centre_id': 'c1'}])
+        result = svc.assign_role('p1', 'r1', centre_id='c2')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['centre_id'], 'c2')
+
+    def test_same_role_at_the_same_centre_is_rejected(self):
+        svc = self._service([{'role_id': 'r1', 'centre_id': 'c1'}])
+        self.assertIsNone(svc.assign_role('p1', 'r1', centre_id='c1'))
+
+    def test_duplicate_org_wide_role_is_rejected(self):
+        svc = self._service([{'role_id': 'r1', 'centre_id': None}])
+        self.assertIsNone(svc.assign_role('p1', 'r1'))
+
+    def test_sub_centre_cascade_flag_is_persisted(self):
+        svc = self._service([])
+        result = svc.assign_role('p1', 'r1', centre_id='c1', include_sub_centres=True)
+        self.assertTrue(result['include_sub_centres'])
+
+
+# =============================================================================
+# First login
+# =============================================================================
+
+@patch("global_access.views.auth_db")
+@patch("global_access.views.roles_db")
+@patch("global_access.views.global_access_db")
+class OnboardCreatesLoginTests(SimpleTestCase):
+    """
+    A directory entry alone can't sign in — login looks the email up in the
+    users table, and an unknown email gets the deliberately vague "if this
+    email is registered" response. Onboarding must create the account.
+    """
+
+    URL = "/api/v1/global/people/onboard/"
+
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(user=FakeUser(role="admin"))
+
+    def _ready(self, db, roles):
+        db.get_role.return_value = custom_role()
+        roles.get_role.return_value = None
+        db.list_people.return_value = []
+        db.add_person.return_value = {'id': PERSON_ID, **_profile(), 'roles': []}
+
+    def _post(self):
+        return self.client.post(
+            self.URL, _payload(assignment={'role_id': ROLE_ID}), format="json")
+
+    def test_creates_an_approved_user(self, db, roles, auth):
+        self._ready(db, roles)
+        auth.get_user_by_email.return_value = None
+
+        res = self._post()
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.json()['loginCreated'])
+        kwargs = auth.create_user.call_args[1]
+        self.assertEqual(kwargs['email'], 'anshal570@gmail.com')
+        # Pending users are refused by IsApprovedUser, so they'd authenticate
+        # and then be blocked everywhere.
+        self.assertEqual(kwargs['status'], 'approved')
+        self.assertEqual(kwargs['first_name'], 'Anshal')
+        self.assertEqual(kwargs['last_name'], 'Aggarwal')
+
+    def test_the_generated_password_is_random_and_never_returned(self, db, roles, auth):
+        self._ready(db, roles)
+        auth.get_user_by_email.return_value = None
+
+        res = self._post()
+
+        password = auth.create_user.call_args[1]['password']
+        self.assertGreaterEqual(len(password), 32)
+        # It must not reach the client, or it would sit in logs and history.
+        self.assertNotIn(password, res.content.decode())
+
+    def test_an_existing_login_is_left_alone(self, db, roles, auth):
+        """Re-onboarding someone must not reset the password they already set."""
+        self._ready(db, roles)
+        auth.get_user_by_email.return_value = {'id': 'u1', 'email': 'anshal570@gmail.com'}
+
+        res = self._post()
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertFalse(res.json()['loginCreated'])
+        auth.create_user.assert_not_called()
+
+
+# =============================================================================
+# Centre role membership must key on the login user
+# =============================================================================
+
+@patch("global_access.views.auth_db")
+@patch("global_access.views.roles_db")
+@patch("global_access.views.global_access_db")
+class CentreRoleMembershipTests(SimpleTestCase):
+    """
+    roles.access._resolve_user_access matches members on the *login* user's
+    id. Recording the directory person's id instead silently grants nothing,
+    which looks like "the permission matrix is being ignored".
+    """
+
+    URL = "/api/v1/global/people/onboard/"
+    LOGIN_ID = "99999999-9999-9999-9999-999999999999"
+
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(user=FakeUser(role="admin"))
+
+    def _ready(self, db, roles, auth):
+        db.get_role.return_value = None
+        roles.get_role.return_value = centre_role()
+        db.list_people.return_value = []
+        # PERSON_ID is the directory row — deliberately different.
+        db.add_person.return_value = {'id': PERSON_ID, **_profile(), 'roles': []}
+        auth.get_user_by_email.return_value = None
+        auth.create_user.return_value = {'id': self.LOGIN_ID, 'email': 'anshal570@gmail.com'}
+
+    def test_membership_uses_the_login_user_id_not_the_directory_id(self, db, roles, auth):
+        self._ready(db, roles, auth)
+
+        res = self.client.post(self.URL, _payload(
+            assignment={'role_id': 'r-teacher-c1'}), format="json")
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        args, _kwargs = roles.add_member.call_args
+        self.assertEqual(args[1], self.LOGIN_ID)
+        self.assertNotEqual(args[1], PERSON_ID)
+
+    def test_reuses_the_existing_login_when_one_is_already_there(self, db, roles, auth):
+        self._ready(db, roles, auth)
+        auth.get_user_by_email.return_value = {'id': 'existing-user', 'email': 'anshal570@gmail.com'}
+
+        self.client.post(self.URL, _payload(
+            assignment={'role_id': 'r-teacher-c1'}), format="json")
+
+        auth.create_user.assert_not_called()
+        self.assertEqual(roles.add_member.call_args[0][1], 'existing-user')

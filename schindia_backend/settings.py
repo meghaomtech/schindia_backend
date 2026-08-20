@@ -158,6 +158,13 @@ if DJANGO_ENV == 'production' and AWS_ACCESS_KEY_ID:
     DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
     MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/media/'
     STATIC_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/static/'
+else:
+    # No S3 outside production, so uploads fall back to the filesystem. Pin
+    # MEDIA_ROOT under media/ (already gitignored) — otherwise relative keys
+    # like "staff-documents/<uuid>/file.pdf" resolve against the working
+    # directory and land uploaded ID documents in the repo tree.
+    MEDIA_ROOT = BASE_DIR / 'media'
+    MEDIA_URL = '/media/'
 
     # DynamoDB table names
     DYNAMODB_INVOICES_TABLE = os.environ.get('DYNAMODB_INVOICES_TABLE', 'ShichidaInvoices-production')
@@ -177,7 +184,19 @@ if DJANGO_ENV in ('production', 'dev') and AWS_ACCESS_KEY_ID:
     EMAIL_BACKEND = 'django_ses.SESBackend'
     AWS_SES_REGION_NAME = AWS_REGION
     AWS_SES_REGION_ENDPOINT = f'email.{AWS_REGION}.amazonaws.com'
-    DEFAULT_FROM_EMAIL = config('AWS_SES_SENDER', default='noreply@shichida.in')
+    # Must be a verified SES identity, else every send fails with MessageRejected.
+    # Warn loudly at boot rather than let each send fail silently later.
+    AWS_SES_SENDER = config('AWS_SES_SENDER', default='')
+    if not AWS_SES_SENDER:
+        import warnings
+        warnings.warn(
+            "AWS_SES_SENDER is not set — falling back to "
+            "noreply-test@shichidain.com. Set it to a verified SES identity.",
+            RuntimeWarning,
+        )
+        AWS_SES_SENDER = 'Shichida India Portal <noreply-test@shichidain.com>'
+    DEFAULT_FROM_EMAIL = AWS_SES_SENDER
+    SERVER_EMAIL = AWS_SES_SENDER
 else:
     # Local: print emails to console
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'

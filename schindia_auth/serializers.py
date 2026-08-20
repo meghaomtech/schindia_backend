@@ -7,6 +7,7 @@ class UserSerializer(serializers.Serializer):
 
     def to_representation(self, instance):
         from roles.access import get_user_access
+        from global_access.capabilities import get_global_capabilities, is_unrestricted
         access = get_user_access(instance)
 
         return {
@@ -17,6 +18,11 @@ class UserSerializer(serializers.Serializer):
             'status': instance.status,
             'permissions': self.get_permissions(access),
             'centres': self.get_centres(access),
+            # Org-wide capabilities, so the client can hide Global settings
+            # for people who hold none. Enforcement still happens per
+            # endpoint — this only drives what's worth showing.
+            'global_capabilities': sorted(get_global_capabilities(instance)),
+            'unrestricted': is_unrestricted(instance),
             'requested_at': instance.requested_at,
         }
 

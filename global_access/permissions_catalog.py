@@ -27,6 +27,16 @@ CAPABILITY_CATEGORIES = {
         ('create_centre_manager_accounts', 'Create Centre Manager accounts'),
         ('create_affiliate_accounts', 'Create Affiliate accounts'),
         ('manage_logins_access_requests', 'Manage logins & access requests'),
+        ('onboard_staff', 'Onboard staff members'),
+    ],
+    # Staff records carry regulated personal data (Aadhaar, PAN, bank
+    # details). These two keys gate it server-side — the fields are stripped
+    # from every response unless the caller holds the matching capability,
+    # so hiding them in the UI is never the only control. A person can always
+    # see their own record; see global_access.views._visible_person.
+    'Staff records': [
+        ('staff_identity_documents', 'Identity & documents'),
+        ('staff_bank_salary_details', 'Bank & salary details'),
     ],
     'Organisation finance': [
         ('product_catalogue', 'Product catalogue'),

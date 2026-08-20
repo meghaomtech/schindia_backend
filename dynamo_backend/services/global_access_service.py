@@ -121,24 +121,71 @@ class GlobalAccessDynamoService:
         for person in people:
             person_assignments = by_person.get(person['id'], [])
             person['roles'] = [
-                {'assignment_id': a['id'], 'role_id': a['role_id'], 'role_name': roles_by_id.get(a['role_id'], {}).get('name', '')}
+                {
+                    'assignment_id': a['id'],
+                    'role_id': a['role_id'],
+                    'role_name': roles_by_id.get(a['role_id'], {}).get('name', ''),
+                    'centre_id': a.get('centre_id'),
+                    'include_sub_centres': a.get('include_sub_centres', False),
+                }
                 for a in person_assignments
             ]
         return people
 
-    def add_person(self, name, email, role_id, member_type='person'):
-        """Create a person and assign them to a global role in one step."""
-        person = self.people.create({'name': name, 'email': email, 'member_type': member_type})
-        assignment = self.assignments.create({'id': str(uuid.uuid4()), 'person_id': person['id'], 'role_id': str(role_id)})
-        person['roles'] = [{'assignment_id': assignment['id'], 'role_id': role_id}]
+    def get_person(self, person_id):
+        return self.people.get(str(person_id))
+
+    def add_person(self, name, email, role_id, member_type='person',
+                   profile=None, centre_id=None, include_sub_centres=False):
+        """
+        Create a person and assign them to a global role in one step.
+
+        `profile` carries the optional staff-record fields collected by the
+        onboarding wizard (job title, phone, emergency contact, identity and
+        bank details). They're stored as-is; access control happens on the
+        way out, in global_access.views._visible_person.
+        """
+        record = {'name': name, 'email': email, 'member_type': member_type}
+        record.update(profile or {})
+        person = self.people.create(record)
+        assignment = self.assign_role(
+            person['id'], role_id,
+            centre_id=centre_id, include_sub_centres=include_sub_centres,
+        )
+        person['roles'] = [{
+            'assignment_id': assignment['id'],
+            'role_id': str(role_id),
+            'centre_id': centre_id,
+            'include_sub_centres': include_sub_centres,
+        }]
         return person
 
-    def assign_role(self, person_id, role_id):
-        """Give an existing global person another role."""
+    def update_person(self, person_id, updates):
+        """Patch a staff record. Callers are responsible for field-level access."""
+        return self.people.update(str(person_id), updates)
+
+    def assign_role(self, person_id, role_id, centre_id=None, include_sub_centres=False):
+        """
+        Give a global person a role, optionally scoped to one centre.
+
+        The same role at two different centres is a legitimate assignment
+        (Priya is Teacher at Sunshine and Manager at Little Stars), so the
+        duplicate check keys on the role *and* the centre rather than the
+        role alone.
+        """
         existing = self.list_assignments(person_id=person_id)
-        if any(a['role_id'] == str(role_id) for a in existing):
-            return None  # Already assigned
-        return self.assignments.create({'id': str(uuid.uuid4()), 'person_id': str(person_id), 'role_id': str(role_id)})
+        if any(
+            a['role_id'] == str(role_id) and (a.get('centre_id') or None) == (centre_id or None)
+            for a in existing
+        ):
+            return None  # Already assigned at this scope
+        return self.assignments.create({
+            'id': str(uuid.uuid4()),
+            'person_id': str(person_id),
+            'role_id': str(role_id),
+            'centre_id': centre_id or None,
+            'include_sub_centres': bool(include_sub_centres),
+        })
 
     def remove_person(self, person_id):
         """Removes the person from Global settings entirely — every assignment they hold."""

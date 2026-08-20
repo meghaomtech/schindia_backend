@@ -54,6 +54,13 @@ def _parent_contact_emails(child):
 
 
 def _send(subject, message, emails):
+    """
+    Send to each recipient independently so one bad address can't block the rest.
+    Never raises — a mail outage must not fail the underlying CRUD action — but
+    logs every failure at ERROR so rejections are visible rather than silent.
+    Returns a list of {'email', 'status', 'error'}, matching billing.notifications.
+    """
+    results = []
     for email in emails:
         try:
             send_mail(
@@ -63,8 +70,16 @@ def _send(subject, message, emails):
                 recipient_list=[email],
                 fail_silently=False,
             )
+            results.append({'email': email, 'status': 'sent', 'error': None})
         except Exception as e:
-            logger.warning(f"Failed to send '{subject}' to {email}: {e}")
+            # In the SES sandbox this is the expected failure for any recipient
+            # that isn't itself a verified identity (MessageRejected).
+            logger.error(f"Failed to send '{subject}' to {email}: {e}", exc_info=True)
+            results.append({'email': email, 'status': 'failed', 'error': str(e)})
+
+    if results and all(r['status'] == 'failed' for r in results):
+        logger.error(f"'{subject}' failed for all {len(results)} recipient(s).")
+    return results
 
 
 def _slot_description(slot, session, room):
@@ -162,3 +177,58 @@ def send_permission_updated_email(role, changed_summary):
     if centre_id:
         emails |= get_centre_admin_emails(centre_id)
     _send(subject, message, emails)
+
+
+def send_staff_invite_email(person, role, centre_id=None):
+    """
+    Invite a newly-onboarded staff member to set their password and sign in
+    (Global settings → People → Onboard staff, step 3).
+
+    Mirrors the wizard's preview text so what the admin was shown is what
+    actually goes out. Returns the same {'sent', 'reason', 'results'} shape
+    as billing.notifications.send_invoice_email so callers can report back.
+    """
+    email = person.get('email')
+    if not email:
+        return {'sent': False, 'reason': 'no_email', 'results': []}
+
+    first_name = (person.get('name') or '').split(' ')[0]
+    role_name = (role or {}).get('name', 'staff member')
+
+    centre_name = ''
+    if centre_id:
+        centre = centres_db.get_centre(str(centre_id))
+        centre_name = (centre or {}).get('name', '')
+    where = f"{role_name} at {centre_name}" if centre_name else role_name
+
+    granted = sum(
+        1 for p in (role or {}).get('permissions', [])
+        if p.get('visible') or p.get('edit')
+    )
+
+    # Accounts are created with a random password nobody is told, so the
+    # first login goes through the reset flow — that's why this walks them
+    # to "Forgot your password?" rather than mentioning a password we set.
+    subject = f"You have been set up on Shichida India — {where}"
+    message = (
+        f"Hello {first_name},\n\n"
+        f"You have been set up on Shichida India as {where}.\n\n"
+        f"To get in for the first time:\n"
+        f"  1. Open the portal and choose \"Forgot your password?\"\n"
+        f"  2. Enter this address — {email} — and we'll email you a code\n"
+        f"  3. Use the code to choose your own password\n\n"
+        f"After that, sign in with your email and password. We'll send a "
+        f"one-time code to confirm it's you each time you log in.\n\n"
+        f"Once you are in you will see {granted} areas of the portal. "
+        f"Anything else appears locked, with a button to ask for it.\n\n"
+        f"Best regards,\n"
+        f"Shichida India Admin Portal"
+    )
+
+    results = _send(subject, message, [email])
+    sent = any(r['status'] == 'sent' for r in results)
+    return {
+        'sent': sent,
+        'reason': None if sent else 'send_failed',
+        'results': results,
+    }
