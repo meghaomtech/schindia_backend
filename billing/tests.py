@@ -720,30 +720,36 @@ class CentrePaymentsTests(BillingAPITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_only_paid_invoices_are_returned_sorted_by_payment_date_desc(
+    def test_real_payment_records_are_returned_newest_first(
         self, mock_billing_db, mock_centres_db, mock_children_db
     ):
+        """
+        Payments come from the ledger now, not from invoices flagged paid —
+        so a part-paid invoice shows the amount actually received, on the day
+        it was received.
+        """
         mock_centres_db.get_centre.return_value = {"id": CENTRE_ID}
         mock_children_db.list_children.return_value = [
             {"id": "child-a", "first_name": "Alice", "last_name": "A"},
             {"id": "child-b", "first_name": "Bob", "last_name": "B"},
         ]
-
-        def list_invoices(child_id):
-            return {
-                "child-a": [
-                    {"id": "inv-1", "status": "Paid", "number": "INV-1", "total_amount": "100",
-                     "updated_at": "2026-01-05T10:00:00", "due_date": "2026-01-10"},
-                    {"id": "inv-2", "status": "Draft", "number": "INV-2", "total_amount": "10",
-                     "updated_at": "2026-01-01T10:00:00", "due_date": "2026-01-10"},
-                ],
-                "child-b": [
-                    {"id": "inv-3", "status": "Paid", "number": "INV-3", "total_amount": "200",
-                     "updated_at": "2026-02-01T10:00:00", "due_date": "2026-02-10"},
-                ],
-            }[child_id]
-
-        mock_billing_db.list_invoices.side_effect = list_invoices
+        mock_billing_db.list_invoices.side_effect = lambda child_id: {
+            "child-a": [{"id": "inv-1", "number": "INV-1", "total_amount": "100",
+                         "due_date": "2026-01-10"}],
+            "child-b": [{"id": "inv-3", "number": "INV-3", "total_amount": "200",
+                         "due_date": "2026-02-10"}],
+        }[child_id]
+        mock_billing_db.list_ledger.side_effect = lambda invoice_id: {
+            "inv-1": [
+                {"id": "p1", "kind": "payment", "amount": "40",
+                 "method": "cash", "occurred_on": "2026-01-05"},
+                # A correction against the same invoice is not a payment.
+                {"id": "c1", "kind": "credit_note", "amount": "10",
+                 "occurred_on": "2026-01-06"},
+            ],
+            "inv-3": [{"id": "p2", "kind": "payment", "amount": "200",
+                       "method": "upi", "occurred_on": "2026-02-01"}],
+        }[invoice_id]
 
         resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/invoices/payments/')
 
@@ -752,7 +758,26 @@ class CentrePaymentsTests(BillingAPITestCase):
         self.assertEqual(len(payments), 2)
         self.assertEqual(payments[0]["invoice_id"], "inv-3")
         self.assertEqual(payments[0]["payment_date"], "2026-02-01")
+        # The part payment reports what was received, not the invoice total.
         self.assertEqual(payments[1]["invoice_id"], "inv-1")
+        self.assertEqual(payments[1]["amount"], 40.0)
+        self.assertEqual(payments[1]["method"], "cash")
+
+    def test_an_invoice_with_no_payments_contributes_nothing(
+        self, mock_billing_db, mock_centres_db, mock_children_db
+    ):
+        mock_centres_db.get_centre.return_value = {"id": CENTRE_ID}
+        mock_children_db.list_children.return_value = [
+            {"id": "child-a", "first_name": "Alice", "last_name": "A"},
+        ]
+        mock_billing_db.list_invoices.return_value = [
+            {"id": "inv-1", "number": "INV-1", "total_amount": "100"},
+        ]
+        mock_billing_db.list_ledger.return_value = []
+
+        resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/invoices/payments/')
+
+        self.assertEqual(resp.data["payments"], [])
 
     def test_falls_back_to_child_name_when_invoice_has_no_student_name(
         self, mock_billing_db, mock_centres_db, mock_children_db
@@ -762,8 +787,11 @@ class CentrePaymentsTests(BillingAPITestCase):
             {"id": "child-a", "first_name": "Alice", "last_name": "A"},
         ]
         mock_billing_db.list_invoices.return_value = [
-            {"id": "inv-1", "status": "Paid", "number": "INV-1", "total_amount": "100",
-             "updated_at": "2026-01-05T10:00:00", "due_date": "2026-01-10"},
+            {"id": "inv-1", "number": "INV-1", "total_amount": "100",
+             "due_date": "2026-01-10"},
+        ]
+        mock_billing_db.list_ledger.return_value = [
+            {"id": "p1", "kind": "payment", "amount": "100", "occurred_on": "2026-01-05"},
         ]
 
         resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/invoices/payments/')
