@@ -134,3 +134,51 @@ class InvoiceTotalFieldTests(SimpleTestCase):
     def test_still_accepts_a_normalised_total(self):
         b = compute_balance({'total': '150', 'due_date': None}, [], today=TODAY)
         self.assertEqual(b['outstanding'], Decimal('150'))
+
+
+class InvoiceNumberSeriesTests(SimpleTestCase):
+    """
+    INV-002: one unbroken series. Previewing must not consume, a hand-typed
+    number must not advance the series, and allocation is atomic so two
+    people raising invoices at once cannot be issued the same number.
+    """
+
+    def _service(self, count=0):
+        from unittest.mock import MagicMock
+        from dynamo_backend.services.billing_service import BillingDynamoService
+        svc = BillingDynamoService.__new__(BillingDynamoService)
+        state = {'count': count}
+
+        def update_item(**kwargs):
+            state['count'] += 1
+            return {'Attributes': {'count': state['count']}}
+
+        counters = MagicMock()
+        counters.get.side_effect = lambda _k: {'count': state['count']}
+        counters.table.update_item.side_effect = update_item
+        svc.invoice_counters = counters
+        svc._state = state
+        return svc
+
+    def test_peek_does_not_consume(self):
+        svc = self._service(count=7)
+        self.assertEqual(svc.peek_invoice_number()[-4:], '0008')
+        self.assertEqual(svc.peek_invoice_number()[-4:], '0008')
+        self.assertEqual(svc._state['count'], 7)
+
+    def test_allocate_advances_by_one(self):
+        svc = self._service(count=7)
+        self.assertEqual(svc.allocate_invoice_number()[-4:], '0008')
+        self.assertEqual(svc.allocate_invoice_number()[-4:], '0009')
+
+    def test_consecutive_allocations_never_repeat(self):
+        svc = self._service()
+        issued = [svc.allocate_invoice_number() for _ in range(25)]
+        self.assertEqual(len(set(issued)), 25)
+
+    def test_number_is_zero_padded_and_year_prefixed(self):
+        from datetime import date
+        svc = self._service()
+        number = svc.allocate_invoice_number()
+        self.assertTrue(number.startswith(f"BA{str(date.today().year)[-2:]}"))
+        self.assertEqual(len(number), 8)

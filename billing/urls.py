@@ -9,6 +9,7 @@ router.register(r'purchases', views.PurchaseViewSet, basename='purchase')
 urlpatterns = [
     # Must be before router.urls so 'summary' isn't matched as a pk
     path('invoices/summary/', views.invoice_summary, name='invoice-summary'),
+    path('invoices/next-number/', views.next_invoice_number, name='invoice-next-number'),
     # Ledger acts. Must precede router.urls, and each is its own endpoint
     # because each asks its own permission (LEDGER_PERMISSIONS in views.py).
     path('invoices/<uuid:invoice_pk>/ledger/', views.invoice_ledger, name='invoice-ledger'),

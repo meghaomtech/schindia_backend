@@ -26,6 +26,10 @@ INVOICE_ITEMS_TABLE = f"{PREFIX}-InvoiceItems"
 # invoice so a correction never mutates the issued document, and so the
 # balance is always derivable from the trail rather than a stored figure.
 INVOICE_LEDGER_TABLE = f"{PREFIX}-InvoiceLedger"
+# Atomic counter for the invoice number series. A per-browser counter cannot
+# produce an unbroken series — two people raising invoices simultaneously
+# would issue the same number.
+INVOICE_COUNTERS_TABLE = f"{PREFIX}-InvoiceCounters"
 PURCHASES_TABLE = f"{PREFIX}-Purchases"
 ROLES_TABLE = f"{PREFIX}-Roles"
 ROLE_PERMISSIONS_TABLE = f"{PREFIX}-RolePermissions"
@@ -60,6 +64,7 @@ ALL_TABLES = {
     'invoices': INVOICES_TABLE,
     'invoice_items': INVOICE_ITEMS_TABLE,
     'invoice_ledger': INVOICE_LEDGER_TABLE,
+    'invoice_counters': INVOICE_COUNTERS_TABLE,
     'purchases': PURCHASES_TABLE,
     'roles': ROLES_TABLE,
     'role_permissions': ROLE_PERMISSIONS_TABLE,

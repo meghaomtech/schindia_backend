@@ -3,7 +3,8 @@
 import uuid
 from ..service import DynamoDBService
 from ..tables import (
-    INVOICES_TABLE, INVOICE_ITEMS_TABLE, INVOICE_LEDGER_TABLE, PURCHASES_TABLE,
+    INVOICES_TABLE, INVOICE_ITEMS_TABLE, INVOICE_LEDGER_TABLE,
+    INVOICE_COUNTERS_TABLE, PURCHASES_TABLE,
 )
 
 
@@ -12,6 +13,7 @@ class BillingDynamoService:
         self.invoices = DynamoDBService(INVOICES_TABLE)
         self.invoice_items = DynamoDBService(INVOICE_ITEMS_TABLE)
         self.ledger = DynamoDBService(INVOICE_LEDGER_TABLE)
+        self.invoice_counters = DynamoDBService(INVOICE_COUNTERS_TABLE)
         self.purchases = DynamoDBService(PURCHASES_TABLE)
 
     # Invoice CRUD
@@ -142,3 +144,37 @@ class BillingDynamoService:
             'cancelled_reason': reason,
             'cancelled_by': cancelled_by,
         })
+
+    # ── Invoice number series ────────────────────────────────────────
+    # One unbroken org-wide series. The counter lives server-side and is
+    # incremented atomically: a per-browser counter issues duplicates the
+    # moment two people raise invoices at once, which a GST series cannot
+    # survive being audited with.
+
+    COUNTER_KEY = 'invoice'
+
+    def _format_invoice_number(self, count, year=None):
+        from datetime import date
+        yr = str(year or date.today().year)[-2:]
+        return f"BA{yr}{str(count).zfill(4)}"
+
+    def peek_invoice_number(self):
+        """
+        The number that *would* be issued next, without consuming it.
+
+        Opening a form and walking away must not burn a number — that is how
+        series end up with holes nobody can explain.
+        """
+        row = self.invoice_counters.get(self.COUNTER_KEY) or {}
+        return self._format_invoice_number(int(row.get('count', 0)) + 1)
+
+    def allocate_invoice_number(self):
+        """Consume the next number. Atomic, so concurrent callers never collide."""
+        resp = self.invoice_counters.table.update_item(
+            Key={'id': self.COUNTER_KEY},
+            UpdateExpression='ADD #c :one',
+            ExpressionAttributeNames={'#c': 'count'},
+            ExpressionAttributeValues={':one': 1},
+            ReturnValues='UPDATED_NEW',
+        )
+        return self._format_invoice_number(int(resp['Attributes']['count']))

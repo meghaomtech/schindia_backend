@@ -184,3 +184,68 @@ class LedgerRecordingTests(SimpleTestCase):
 
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         db.cancel_invoice.assert_not_called()
+
+
+@patch("billing.views.billing_db")
+class InvoiceNumberAllocationTests(SimpleTestCase):
+    """Allocation happens at generate, never at open (INV-002)."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(user=FakeUser())
+
+    def test_preview_does_not_consume_a_number(self, db):
+        db.peek_invoice_number.return_value = 'BA260008'
+
+        res = self.client.get('/api/v1/invoices/next-number/')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.json()['number'], 'BA260008')
+        db.allocate_invoice_number.assert_not_called()
+
+    @patch("billing.views.get_user_access")
+    @patch("billing.views.send_invoice_email")
+    def test_generating_without_a_number_allocates_one(self, _mail, access, db):
+        access.return_value = MagicMock(can_access_centre=lambda *_a: True)
+        db.allocate_invoice_number.return_value = 'BA260009'
+        db.create_invoice.return_value = {'id': 'inv-1'}
+
+        res = self.client.post('/api/v1/invoices/', {'totalAmount': 100}, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        db.allocate_invoice_number.assert_called_once()
+        self.assertEqual(db.create_invoice.call_args[0][0]['number'], 'BA260009')
+
+    @patch("billing.views.get_user_access")
+    @patch("billing.views.send_invoice_email")
+    def test_a_hand_typed_number_consumes_nothing(self, _mail, access, db):
+        """"My number is mine" — the series must not advance."""
+        access.return_value = MagicMock(can_access_centre=lambda *_a: True)
+        db.create_invoice.return_value = {'id': 'inv-1'}
+
+        res = self.client.post(
+            '/api/v1/invoices/', {'totalAmount': 100, 'number': 'CUSTOM-1'}, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        db.allocate_invoice_number.assert_not_called()
+        self.assertEqual(db.create_invoice.call_args[0][0]['number'], 'CUSTOM-1')
+
+    @patch("billing.views.get_user_access")
+    @patch("billing.views.send_invoice_email")
+    def test_a_hand_typed_number_sent_as_invoice_number_is_honoured(self, _mail, access, db):
+        """
+        The client posts `invoiceNumber` (parsed to `invoice_number`) while
+        stored invoices key it as `number`. Without normalising, the typed
+        number is dropped and the series advances when it should not.
+        """
+        access.return_value = MagicMock(can_access_centre=lambda *_a: True)
+        db.create_invoice.return_value = {'id': 'inv-1'}
+
+        res = self.client.post(
+            '/api/v1/invoices/', {'totalAmount': 100, 'invoiceNumber': 'MINE-7'}, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        db.allocate_invoice_number.assert_not_called()
+        sent = db.create_invoice.call_args[0][0]
+        self.assertEqual(sent['number'], 'MINE-7')
+        self.assertNotIn('invoice_number', sent)

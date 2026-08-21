@@ -91,6 +91,16 @@ class InvoiceViewSet(viewsets.ViewSet):
 
         data = request.data.copy()
         data['user_id'] = str(request.user.id)
+        # The series advances only when we issue the number. A hand-typed
+        # number is the caller's own and consumes nothing, which is what keeps
+        # the series unbroken either way (INV-002).
+        # The client posts `invoiceNumber`, which the camelCase parser turns
+        # into `invoice_number`; stored invoices key it as `number`. Accept
+        # either and normalise, or a hand-typed number is silently dropped.
+        supplied = (data.get('number') or data.get('invoice_number') or '').strip()
+        data['number'] = supplied or billing_db.allocate_invoice_number()
+        data.pop('invoice_number', None)
+
         invoice = billing_db.create_invoice(data)
         send_invoice_email(invoice)
         return Response(invoice, status=status.HTTP_201_CREATED)
@@ -624,3 +634,15 @@ def cancel_invoice(request, invoice_pk):
         cancelled_by=str(getattr(request.user, 'id', '')),
     )
     return Response({'invoice': updated, 'balance': _balance_for(updated or invoice)})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def next_invoice_number(request):
+    """
+    Preview the next number without consuming it (INV-002).
+
+    The form shows this on open. Allocation happens at generate, so a form
+    opened and abandoned leaves no hole in the series.
+    """
+    return Response({'number': billing_db.peek_invoice_number(), 'preview': True})
