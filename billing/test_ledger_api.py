@@ -249,3 +249,83 @@ class InvoiceNumberAllocationTests(SimpleTestCase):
         sent = db.create_invoice.call_args[0][0]
         self.assertEqual(sent['number'], 'MINE-7')
         self.assertNotIn('invoice_number', sent)
+
+
+@patch("billing.views.children_db")
+@patch("billing.views.centres_db")
+@patch("billing.views.get_user_access")
+@patch("billing.views.billing_db")
+class CentreDebtorsTests(SimpleTestCase):
+    """GET /centres/<id>/invoices/debtors/ — INV-013."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(user=FakeUser())
+        self.url = f"/api/v1/centres/{CENTRE_ID}/invoices/debtors/"
+
+    def _setup(self, db, access, centres, children, invoices, ledger_by_invoice=None):
+        access.return_value = access_allowing('finance.view_invoices')
+        centres.get_centre.return_value = {'id': CENTRE_ID}
+        children.list_children.return_value = [
+            {'id': 'child-a', 'first_name': 'Alice', 'last_name': 'A'}]
+        db.list_invoices.return_value = invoices
+        db.list_ledger.side_effect = lambda inv_id: (ledger_by_invoice or {}).get(inv_id, [])
+
+    def _invoice(self, iid, total, due, **extra):
+        return {'id': iid, 'number': iid.upper(), 'total_amount': total,
+                'due_date': due, 'child_id': 'child-a', **extra}
+
+    def test_bands_debt_by_age_oldest_first(self, db, access, centres, children):
+        # 'today' is real here, so use dates far enough apart to be stable.
+        self._setup(db, access, centres, children, [
+            self._invoice('inv-old', '1000', '2020-01-01'),   # 90+
+            self._invoice('inv-new', '500', '2099-01-01'),    # not yet due
+        ])
+
+        res = self.client.get(self.url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        body = res.json()
+        self.assertEqual(body['buckets']['90+']['count'], 1)
+        self.assertEqual(body['buckets']['current']['count'], 1)
+        self.assertEqual(body['totalOutstanding'], 1500.0)
+        # Oldest debt leads — that is the order it gets worked in.
+        self.assertEqual(body['debtors'][0]['invoiceId'], 'inv-old')
+
+    def test_settled_invoices_never_appear(self, db, access, centres, children):
+        self._setup(db, access, centres, children,
+                    [self._invoice('inv-paid', '1000', '2020-01-01')],
+                    {'inv-paid': [{'kind': 'payment', 'amount': '1000'}]})
+
+        res = self.client.get(self.url)
+
+        self.assertEqual(res.json()['debtors'], [])
+        self.assertEqual(res.json()['totalOutstanding'], 0.0)
+
+    def test_cancelled_and_written_off_are_owed_by_nobody(self, db, access, centres, children):
+        self._setup(db, access, centres, children, [
+            self._invoice('inv-void', '1000', '2020-01-01',
+                          cancelled_at='2026-01-01T00:00:00'),
+            self._invoice('inv-wo', '800', '2020-01-01'),
+        ], {'inv-wo': [{'kind': 'write_off', 'amount': '800'}]})
+
+        res = self.client.get(self.url)
+
+        self.assertEqual(res.json()['debtors'], [])
+
+    def test_a_part_paid_invoice_shows_only_what_is_left(self, db, access, centres, children):
+        self._setup(db, access, centres, children,
+                    [self._invoice('inv-part', '1000', '2020-01-01')],
+                    {'inv-part': [{'kind': 'payment', 'amount': '600'}]})
+
+        res = self.client.get(self.url)
+
+        self.assertEqual(res.json()['debtors'][0]['outstanding'], 400.0)
+
+    def test_viewing_debtors_requires_the_invoices_permission(self, db, access, centres, children):
+        self._setup(db, access, centres, children, [])
+        access.return_value = access_allowing()  # holds nothing
+
+        res = self.client.get(self.url)
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)

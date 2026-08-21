@@ -76,6 +76,9 @@ class ComputeBalanceTests(SimpleTestCase):
             invoice(total='5000', cancelled_at='2026-08-19T10:00:00'),
             [entry(PAYMENT, '100')], today=TODAY)
         self.assertEqual(b['status'], VOID)
+        # The figure must go too, not just the label — otherwise a void
+        # invoice keeps showing up as debt in totals and the debtors view.
+        self.assertEqual(b['outstanding'], Decimal('0'))
 
     def test_past_due_with_money_outstanding_is_overdue(self):
         b = compute_balance(invoice(due_date='2026-08-01'), [], today=TODAY)

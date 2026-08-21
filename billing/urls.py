@@ -31,6 +31,11 @@ urlpatterns = [
         name='centre-invoice-generate-data'
     ),
     path(
+        'centres/<uuid:centre_pk>/invoices/debtors/',
+        views.centre_debtors,
+        name='centre-debtors'
+    ),
+    path(
         'centres/<uuid:centre_pk>/invoices/payments/',
         views.centre_payments,
         name='centre-payments'

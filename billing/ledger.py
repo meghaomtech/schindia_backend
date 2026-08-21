@@ -70,6 +70,12 @@ def compute_balance(invoice, entries, today=None):
     if outstanding < 0:
         outstanding = Decimal('0')
 
+    # A cancelled invoice is owed by nobody whatever its lines said, so the
+    # figure has to be zero too — not just the status. Otherwise it keeps
+    # surfacing as debt in totals and the debtors view.
+    if invoice.get('cancelled_at'):
+        outstanding = Decimal('0')
+
     return {
         'total': total,
         'paid': payments,

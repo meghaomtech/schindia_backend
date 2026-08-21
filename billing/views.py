@@ -646,3 +646,67 @@ def next_invoice_number(request):
     opened and abandoned leaves no hole in the series.
     """
     return Response({'number': billing_db.peek_invoice_number(), 'preview': True})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def centre_debtors(request, centre_pk):
+    """
+    Who owes what, banded by how long it has been owed (INV-007 / INV-013).
+
+    Debt that is merely visible gets discovered; debt that is bucketed gets
+    worked. Settled, written-off and cancelled invoices are owed by nobody
+    and never appear.
+    """
+    access = get_user_access(request.user, request)
+    if not access.can_access_centre(centre_pk):
+        return centre_not_found()
+    if not access.can_view(centre_pk, 'finance.view_invoices'):
+        return permission_denied()
+
+    centre = centres_db.get_centre(str(centre_pk))
+    if not centre:
+        return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    buckets = {b: {'count': 0, 'total': 0.0} for b in
+               ('current', '0-30', '31-60', '61-90', '90+')}
+    rows = []
+
+    for child in children_db.list_children(str(centre_pk)):
+        for inv in billing_db.list_invoices(child_id=child['id']):
+            enriched = _with_balance(inv)
+            balance = enriched['balance']
+            outstanding = balance['outstanding']
+            if outstanding <= 0:
+                continue
+
+            bucket = ledger.ageing_bucket(inv, outstanding)
+            if not bucket:
+                continue
+
+            amount = float(outstanding)
+            buckets[bucket]['count'] += 1
+            buckets[bucket]['total'] += amount
+            rows.append({
+                'invoice_id': inv.get('id', ''),
+                'invoice_number': inv.get('number', ''),
+                'child_id': child.get('id', ''),
+                'student_name': (
+                    inv.get('student_name')
+                    or f"{child.get('first_name', '')} {child.get('last_name', '')}".strip()
+                ),
+                'due_date': inv.get('due_date', ''),
+                'outstanding': amount,
+                'status': balance['status'],
+                'bucket': bucket,
+            })
+
+    # Oldest debt first — that is the order it should be worked in.
+    order = {'90+': 0, '61-90': 1, '31-60': 2, '0-30': 3, 'current': 4}
+    rows.sort(key=lambda r: (order[r['bucket']], -r['outstanding']))
+
+    return Response({
+        'buckets': buckets,
+        'total_outstanding': sum(b['total'] for b in buckets.values()),
+        'debtors': rows,
+    })
