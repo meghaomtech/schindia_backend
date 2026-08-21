@@ -55,7 +55,9 @@ def compute_balance(invoice, entries, today=None):
     this invoice; `invoice` needs `total`, `due_date` and `cancelled_at`.
     """
     entries = entries or []
-    total = _money(invoice.get('total'))
+    # Stored invoices use `total_amount`; `total` is accepted so callers
+    # holding a already-normalised shape still resolve correctly.
+    total = _money(invoice.get('total_amount', invoice.get('total')))
 
     payments = _sum(entries, PAYMENT)
     credits = _sum(entries, CREDIT_NOTE)

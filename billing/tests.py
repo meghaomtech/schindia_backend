@@ -97,12 +97,19 @@ class BillingPermissionsTests(SimpleTestCase):
 @patch('billing.views.billing_db')
 class InvoiceViewSetTests(BillingAPITestCase):
     def test_list_invoices_for_current_user(self, mock_db):
-        mock_db.list_invoices.return_value = [{"id": INVOICE_ID, "status": "Draft"}]
+        mock_db.list_invoices.return_value = [
+            {"id": INVOICE_ID, "status": "Draft", "total_amount": "500",
+             "due_date": "2099-01-01"}
+        ]
+        mock_db.list_ledger.return_value = []
 
         resp = self.client.get('/api/v1/invoices/')
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp.data, [{"id": INVOICE_ID, "status": "Draft"}])
+        self.assertEqual([i["id"] for i in resp.data], [INVOICE_ID])
+        # Each invoice now carries its derived balance, so callers never
+        # compute their own and two screens cannot disagree.
+        self.assertEqual(resp.data[0]["balance"]["status"], "issued")
         mock_db.list_invoices.assert_called_once_with(user_id=USER_ID)
 
     def test_list_invoices_nested_under_child(self, mock_db):
@@ -549,9 +556,9 @@ class CentreInvoicesTests(BillingAPITestCase):
         invoices_by_child = {
             "child-a": [
                 {"id": "inv-1", "status": "Sent", "total_amount": "100", "invoice_date": "2026-01-01",
-                 "student_name": "Alice", "number": "INV-1"},
+                 "due_date": "2099-01-01", "student_name": "Alice", "number": "INV-1"},
                 {"id": "inv-2", "status": "Overdue", "total_amount": "50", "invoice_date": "2026-02-01",
-                 "student_name": "Alice", "number": "INV-2"},
+                 "due_date": "2026-02-15", "student_name": "Alice", "number": "INV-2"},
             ],
             "child-b": [
                 {"id": "inv-3", "status": "Paid", "total_amount": "200", "invoice_date": "2026-03-01",
@@ -559,6 +566,9 @@ class CentreInvoicesTests(BillingAPITestCase):
             ],
         }
         mock_billing_db.list_invoices.side_effect = lambda child_id: invoices_by_child[child_id]
+        # No ledger entries: these predate the ledger, so inv-3's stored
+        # "Paid" is what the legacy shim in views._with_balance reads.
+        mock_billing_db.list_ledger.return_value = []
 
     def test_returns_summary_and_full_invoice_list(self, mock_billing_db, mock_centres_db, mock_children_db):
         self._setup_two_children_with_invoices(mock_centres_db, mock_children_db, mock_billing_db)
@@ -575,6 +585,8 @@ class CentreInvoicesTests(BillingAPITestCase):
     def test_filter_by_status(self, mock_billing_db, mock_centres_db, mock_children_db):
         self._setup_two_children_with_invoices(mock_centres_db, mock_children_db, mock_billing_db)
 
+        # Status is now derived from the ledger, not read from the stored
+        # field — 'Paid' normalises to the derived 'paid'.
         resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/invoices/?status=Paid')
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)

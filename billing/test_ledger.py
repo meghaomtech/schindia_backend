@@ -122,3 +122,15 @@ class AgeingBucketTests(SimpleTestCase):
             with self.subTest(due=due):
                 self.assertEqual(
                     ageing_bucket(invoice(due_date=due), Decimal('100'), TODAY), expected)
+
+
+class InvoiceTotalFieldTests(SimpleTestCase):
+    """Stored invoices key the total as `total_amount`, not `total`."""
+
+    def test_reads_the_stored_total_amount_field(self):
+        b = compute_balance({'total_amount': '150', 'due_date': None}, [], today=TODAY)
+        self.assertEqual(b['outstanding'], Decimal('150'))
+
+    def test_still_accepts_a_normalised_total(self):
+        b = compute_balance({'total': '150', 'due_date': None}, [], today=TODAY)
+        self.assertEqual(b['outstanding'], Decimal('150'))

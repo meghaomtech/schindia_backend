@@ -26,6 +26,38 @@ def _child_centre_id(child_id):
     return child.get('centre_id') if child else None
 
 
+def _with_balance(invoice):
+    """
+    Attach the derived balance so callers never compute their own.
+
+    Two screens that each do their own arithmetic are two screens that will
+    eventually disagree about what a family owes.
+    """
+    if not invoice:
+        return invoice
+    entries = billing_db.list_ledger(invoice['id'])
+
+    # Invoices raised before the ledger existed carry a stored status and no
+    # entries. Without this they would all suddenly read as fully owed, and a
+    # settled invoice showing as debt is worse than useless. Treated as a
+    # single synthetic payment so the figure matches what was recorded at the
+    # time; anything raised from now on builds a real trail.
+    if not entries and str(invoice.get('status', '')).lower() == 'paid':
+        entries = [{
+            'kind': ledger.PAYMENT,
+            'amount': invoice.get('total_amount') or invoice.get('total') or '0',
+            'reason': 'legacy: stored status was Paid',
+        }]
+
+    enriched = dict(invoice)
+    enriched['balance'] = ledger.compute_balance(invoice, entries)
+    return enriched
+
+
+def _with_balances(invoices):
+    return [_with_balance(i) for i in invoices]
+
+
 class InvoiceViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated, IsApprovedUser]
 
@@ -39,7 +71,7 @@ class InvoiceViewSet(viewsets.ViewSet):
         else:
             # Not centre-scoped: only ever returns the caller's own invoices.
             invoices = billing_db.list_invoices(user_id=str(request.user.id))
-        return Response(invoices)
+        return Response(_with_balances(invoices))
 
     def retrieve(self, request, *args, **kwargs):
         invoice = billing_db.get_invoice(str(kwargs['pk']))
@@ -48,7 +80,7 @@ class InvoiceViewSet(viewsets.ViewSet):
         access = get_user_access(request.user, request)
         if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
             return centre_not_found('Invoice not found.')
-        return Response(invoice)
+        return Response(_with_balance(invoice))
 
     def create(self, request, *args, **kwargs):
         child_pk = self.kwargs.get('child_pk')
@@ -274,24 +306,27 @@ def centre_invoices(request, centre_pk):
     for child_id in child_ids:
         all_centre_invoices.extend(billing_db.list_invoices(child_id=child_id))
 
+    # Resolve every invoice against its ledger once, then work from that.
+    # The old stored `status` field could not express Part paid, went stale
+    # the moment a payment landed, and counted a written-off invoice as money
+    # received — so totals here were wrong as soon as anything was corrected.
+    all_centre_invoices = _with_balances(all_centre_invoices)
+
     total_outstanding = sum(
-        float(i.get('total_amount', 0))
-        for i in all_centre_invoices
-        if i.get('status') in ('Sent', 'Draft', 'Overdue')
-    )
-    total_paid = sum(
-        float(i.get('total_amount', 0))
-        for i in all_centre_invoices
-        if i.get('status') == 'Paid'
-    )
-    overdue_count = sum(1 for i in all_centre_invoices if i.get('status') == 'Overdue')
+        float(i['balance']['outstanding']) for i in all_centre_invoices)
+    total_paid = sum(float(i['balance']['paid']) for i in all_centre_invoices)
+    overdue_count = sum(
+        1 for i in all_centre_invoices if i['balance']['status'] == ledger.OVERDUE)
 
     # Apply filters for the response list
     all_invoices = list(all_centre_invoices)
 
     inv_status = request.query_params.get('status')
     if inv_status and inv_status != 'All':
-        all_invoices = [i for i in all_invoices if i.get('status') == inv_status]
+        # Accept the derived names ('part_paid') and the legacy display
+        # names ('Part paid') callers may still be sending.
+        wanted = inv_status.strip().lower().replace(' ', '_')
+        all_invoices = [i for i in all_invoices if i['balance']['status'] == wanted]
 
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
