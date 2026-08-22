@@ -11,6 +11,7 @@ from dynamo_backend.services import billing_db, centres_db, children_db
 from roles.access import get_user_access, centre_not_found, permission_denied
 from . import ledger
 from .notifications import send_invoice_email
+from .totals import compute_invoice_total, is_line_itemised
 from .serializers import (
     CancelInvoiceSerializer, CorrectionSerializer, KIND_SERIALIZERS,
 )
@@ -97,7 +98,7 @@ class InvoiceViewSet(viewsets.ViewSet):
         if not invoice:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
         access = get_user_access(request.user, request)
-        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+        if not access.can_access_centre(_invoice_centre_id(invoice)):
             return centre_not_found('Invoice not found.')
         return Response(_with_balance(invoice))
 
@@ -140,6 +141,13 @@ class InvoiceViewSet(viewsets.ViewSet):
         data['number'] = supplied or billing_db.allocate_invoice_number()
         data.pop('invoice_number', None)
 
+        # What the invoice comes to, worked out from its own lines rather than
+        # taken from the client. Without a stored total every balance resolves
+        # to zero, so a freshly raised invoice reads as already settled and
+        # never appears as owed, payable or overdue anywhere.
+        if is_line_itemised(data):
+            data['total_amount'] = str(compute_invoice_total(data))
+
         invoice = billing_db.create_invoice(data)
         send_invoice_email(invoice)
         return Response(invoice, status=status.HTTP_201_CREATED)
@@ -149,9 +157,17 @@ class InvoiceViewSet(viewsets.ViewSet):
         if not invoice:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
         access = get_user_access(request.user, request)
-        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+        if not access.can_access_centre(_invoice_centre_id(invoice)):
             return centre_not_found('Invoice not found.')
-        invoice = billing_db.update_invoice(str(kwargs['pk']), request.data)
+        # Recompute from the merged result, not the patch alone: a partial
+        # update may change one fee and leave the rest, and a total left over
+        # from the old lines is a figure the printed invoice contradicts.
+        updates = request.data.copy()
+        merged = {**invoice, **updates}
+        if is_line_itemised(updates) and is_line_itemised(merged):
+            updates['total_amount'] = str(compute_invoice_total(merged))
+
+        invoice = billing_db.update_invoice(str(kwargs['pk']), updates)
         return Response(invoice)
 
     def destroy(self, request, *args, **kwargs):
@@ -159,7 +175,7 @@ class InvoiceViewSet(viewsets.ViewSet):
         if not invoice:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
         access = get_user_access(request.user, request)
-        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+        if not access.can_access_centre(_invoice_centre_id(invoice)):
             return centre_not_found('Invoice not found.')
         billing_db.delete_invoice(str(kwargs['pk']))
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -171,7 +187,7 @@ class InvoiceViewSet(viewsets.ViewSet):
         if not invoice:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
         access = get_user_access(request.user, request)
-        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+        if not access.can_access_centre(_invoice_centre_id(invoice)):
             return centre_not_found('Invoice not found.')
         if invoice.get('status') == 'Paid':
             return Response(
@@ -191,7 +207,7 @@ class InvoiceViewSet(viewsets.ViewSet):
         if not invoice:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
         access = get_user_access(request.user, request)
-        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+        if not access.can_access_centre(_invoice_centre_id(invoice)):
             return centre_not_found('Invoice not found.')
         updated = billing_db.update_invoice(str(pk), {'status': 'Paid'})
         return Response(updated)
@@ -203,7 +219,7 @@ class InvoiceViewSet(viewsets.ViewSet):
         if not invoice:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
         access = get_user_access(request.user, request)
-        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+        if not access.can_access_centre(_invoice_centre_id(invoice)):
             return centre_not_found('Invoice not found.')
         updated = billing_db.update_invoice(str(pk), {'status': 'Overdue'})
         return Response(updated)
@@ -215,7 +231,7 @@ class InvoiceViewSet(viewsets.ViewSet):
         if not invoice:
             return Response({'detail': 'Invoice not found.'}, status=status.HTTP_404_NOT_FOUND)
         access = get_user_access(request.user, request)
-        if not access.can_access_centre(_child_centre_id(invoice.get('child_id'))):
+        if not access.can_access_centre(_invoice_centre_id(invoice)):
             return centre_not_found('Invoice not found.')
 
         result = send_invoice_email(invoice)
@@ -527,7 +543,14 @@ LEDGER_PERMISSIONS = {
 
 
 def _invoice_centre_id(invoice):
-    """An invoice is scoped by the centre of the child it belongs to."""
+    """
+    The centre an invoice is scoped to.
+
+    The stamp comes first; the child is the fallback for rows written before
+    it existed. Resolving through the child alone returns None for anything
+    billed without one, and scope checks fail closed on None — so the invoice
+    would list in the centre's history and then refuse to open.
+    """
     return invoice.get('centre_id') or _child_centre_id(invoice.get('child_id'))
 
 
