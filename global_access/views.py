@@ -334,8 +334,15 @@ def onboard_staff(request):
     # like "Regional Head" carry no kind but are still org-wide.
     role_id = str(assignment['role_id'])
     role = global_access_db.get_role(role_id)
-    centre_role = None if role else roles_db.get_role(role_id)
-    if not role and not centre_role:
+    
+    if not role:
+        # Check if they are mistakenly trying to onboard a centre-specific role
+        centre_role = roles_db.get_role(role_id)
+        if centre_role:
+            return Response(
+                {'role_id': ['Centre-specific roles cannot be created from Global Settings.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return Response({'role_id': ['Role not found.']}, status=status.HTTP_404_NOT_FOUND)
 
     centre_id = assignment.get('centre_id') or None
@@ -344,22 +351,6 @@ def onboard_staff(request):
             {'centre_id': ['This role applies organisation-wide and takes no centre.']},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    if centre_role:
-        # A centre role already belongs to exactly one centre, so trust the
-        # role's own centre over whatever the client sent — and reject a
-        # mismatch rather than silently reassigning them elsewhere.
-        role_centre = str(centre_role.get('centre_id') or '')
-        if centre_id and centre_id != role_centre:
-            return Response(
-                {'centre_id': ['That role does not belong to the centre you picked.']},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        centre_id = role_centre or None
-        if not centre_id:
-            return Response(
-                {'centre_id': ['This role applies at one centre — pick which.']},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
     email = profile['email'].strip().lower()
     if any((p.get('email') or '').strip().lower() == email
@@ -399,25 +390,13 @@ def onboard_staff(request):
         name, email, role_id,
         member_type=member_type,
         profile=profile,
-        centre_id=centre_id,
+        centre_id=None,
         include_sub_centres=assignment.get('include_sub_centres', False),
     )
 
-    # A centre role's membership lives in the roles app, which is what the
-    # per-centre permission checks read — the directory row alone would grant
-    # nothing at the centre.
-    if centre_role:
-        # Must be the *login* user's id, not the directory person's — that's
-        # what roles.access._resolve_user_access matches members against when
-        # it works out what this user may do. Passing person['id'] silently
-        # grants nothing.
-        roles_db.add_member(
-            role_id, (login_user or {}).get('id'), name=name, email=email
-        )
-
     invite = {'sent': False, 'reason': 'not_requested'}
     if serializer.validated_data.get('send_invite', True):
-        invite = send_staff_invite_email(person, role or centre_role, centre_id)
+        invite = send_staff_invite_email(person, role, None)
 
     return Response(
         {

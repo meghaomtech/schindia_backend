@@ -622,42 +622,15 @@ class OnboardStaffTests(SimpleTestCase):
         db.list_people.return_value = people or []
         db.add_person.return_value = {'id': PERSON_ID, **_profile(), 'roles': []}
 
-    @patch("global_access.views.send_staff_invite_email")
-    def test_creates_person_with_profile_and_centre_scope(self, invite, db, roles, auth):
-        self._centre(db, roles)
-        invite.return_value = {'sent': True, 'reason': None, 'results': []}
-
-        res = self.client.post(self.URL, _payload(
-            profile=_profile(phone='9876543210'),
-            assignment={'role_id': 'r-teacher-c1', 'centre_id': CENTRE_ID, 'includeSubCentres': True},
-            send_invite=True,
-        ), format="json")
-
-        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
-        _args, kwargs = db.add_person.call_args
-        self.assertEqual(kwargs['centre_id'], CENTRE_ID)
-        self.assertTrue(kwargs['include_sub_centres'])
-        # Centre roles also need membership in the roles app, which is what
-        # the per-centre permission checks actually read.
-        roles.add_member.assert_called_once()
-        invite.assert_called_once()
-
-    def test_centre_role_takes_its_centre_from_the_role(self, db, roles, auth):
-        """The client need not send centre_id — the role already knows."""
+    def test_centre_role_is_rejected(self, db, roles, auth):
+        """Centre-specific roles cannot be created via the Global Settings onboarding endpoint."""
         self._centre(db, roles)
         res = self.client.post(self.URL, _payload(
             assignment={'role_id': 'r-teacher-c1'}), format="json")
-        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(db.add_person.call_args[1]['centre_id'], CENTRE_ID)
-
-    def test_centre_mismatch_is_rejected(self, db, roles, auth):
-        """Picking a different centre must not silently reassign the role."""
-        self._centre(db, roles)
-        res = self.client.post(self.URL, _payload(
-            assignment={'role_id': 'r-teacher-c1', 'centre_id': 'other-centre'}), format="json")
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('centreId', res.json())
+        self.assertIn('Centre-specific roles cannot be created from Global Settings', str(res.json()))
         db.add_person.assert_not_called()
+        roles.add_member.assert_not_called()
 
     def test_global_role_rejects_a_centre(self, db, roles, auth):
         self._global(db, roles)
@@ -947,53 +920,3 @@ class OnboardCreatesLoginTests(SimpleTestCase):
         auth.create_user.assert_not_called()
 
 
-# =============================================================================
-# Centre role membership must key on the login user
-# =============================================================================
-
-@patch("global_access.views.auth_db")
-@patch("global_access.views.roles_db")
-@patch("global_access.views.global_access_db")
-class CentreRoleMembershipTests(SimpleTestCase):
-    """
-    roles.access._resolve_user_access matches members on the *login* user's
-    id. Recording the directory person's id instead silently grants nothing,
-    which looks like "the permission matrix is being ignored".
-    """
-
-    URL = "/api/v1/global/people/onboard/"
-    LOGIN_ID = "99999999-9999-9999-9999-999999999999"
-
-    def setUp(self):
-        self.client = APIClient()
-        self.client.force_authenticate(user=FakeUser(role="admin"))
-
-    def _ready(self, db, roles, auth):
-        db.get_role.return_value = None
-        roles.get_role.return_value = centre_role()
-        db.list_people.return_value = []
-        # PERSON_ID is the directory row — deliberately different.
-        db.add_person.return_value = {'id': PERSON_ID, **_profile(), 'roles': []}
-        auth.get_user_by_email.return_value = None
-        auth.create_user.return_value = {'id': self.LOGIN_ID, 'email': 'anshal570@gmail.com'}
-
-    def test_membership_uses_the_login_user_id_not_the_directory_id(self, db, roles, auth):
-        self._ready(db, roles, auth)
-
-        res = self.client.post(self.URL, _payload(
-            assignment={'role_id': 'r-teacher-c1'}), format="json")
-
-        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
-        args, _kwargs = roles.add_member.call_args
-        self.assertEqual(args[1], self.LOGIN_ID)
-        self.assertNotEqual(args[1], PERSON_ID)
-
-    def test_reuses_the_existing_login_when_one_is_already_there(self, db, roles, auth):
-        self._ready(db, roles, auth)
-        auth.get_user_by_email.return_value = {'id': 'existing-user', 'email': 'anshal570@gmail.com'}
-
-        self.client.post(self.URL, _payload(
-            assignment={'role_id': 'r-teacher-c1'}), format="json")
-
-        auth.create_user.assert_not_called()
-        self.assertEqual(roles.add_member.call_args[0][1], 'existing-user')
