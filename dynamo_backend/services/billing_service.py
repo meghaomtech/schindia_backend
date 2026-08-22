@@ -40,12 +40,21 @@ class BillingDynamoService:
             invoice['items'] = self.list_invoice_items(invoice_id)
         return invoice
 
-    def list_invoices(self, child_id=None, user_id=None):
-        """List invoices filtered by child or user."""
+    def list_invoices(self, child_id=None, user_id=None, centre_id=None):
+        """
+        List invoices filtered by child, user or centre.
+
+        Centre matters on its own because an invoice can be raised at reception
+        without naming a child — a registration fee taken before enrolment, for
+        instance. Reaching invoices only through children loses exactly those,
+        and they are unreachable afterwards at any centre.
+        """
         if child_id:
             invoices = self.invoices.query_by_index('child_id-index', 'child_id', str(child_id))
         elif user_id:
             invoices = self.invoices.query_by_index('user_id-index', 'user_id', str(user_id))
+        elif centre_id:
+            invoices = self.invoices.query_by_index('centre_id-index', 'centre_id', str(centre_id))
         else:
             invoices = self.invoices.list_all()
 

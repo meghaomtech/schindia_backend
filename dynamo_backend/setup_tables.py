@@ -195,6 +195,7 @@ TABLE_DEFINITIONS = [
             {'AttributeName': 'id', 'AttributeType': 'S'},
             {'AttributeName': 'child_id', 'AttributeType': 'S'},
             {'AttributeName': 'user_id', 'AttributeType': 'S'},
+            {'AttributeName': 'centre_id', 'AttributeType': 'S'},
         ],
         'GlobalSecondaryIndexes': [
             {
@@ -205,6 +206,14 @@ TABLE_DEFINITIONS = [
             {
                 'IndexName': 'user_id-index',
                 'KeySchema': [{'AttributeName': 'user_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            },
+            {
+                # An invoice belongs to the centre that raised it whether or not
+                # it names a child. Without this the centre listing has to walk
+                # every child, and anything billed without one is invisible.
+                'IndexName': 'centre_id-index',
+                'KeySchema': [{'AttributeName': 'centre_id', 'KeyType': 'HASH'}],
                 'Projection': {'ProjectionType': 'ALL'},
             },
         ],

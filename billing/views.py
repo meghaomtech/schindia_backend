@@ -26,6 +26,25 @@ def _child_centre_id(child_id):
     return child.get('centre_id') if child else None
 
 
+def _centre_invoice_set(centre_pk):
+    """
+    Every invoice belonging to a centre, however it was raised.
+
+    Two routes reach the same centre and both are needed. Invoices stamped with
+    `centre_id` are found directly — including any raised without naming a
+    child, which the child walk cannot see at all. Invoices predating that
+    stamp are still reachable only through their child. Older rows can satisfy
+    both, so the result is deduplicated by id rather than concatenated.
+    """
+    by_id = {}
+    for inv in billing_db.list_invoices(centre_id=str(centre_pk)):
+        by_id[inv['id']] = inv
+    for child in children_db.list_children(str(centre_pk)):
+        for inv in billing_db.list_invoices(child_id=child['id']):
+            by_id.setdefault(inv['id'], inv)
+    return list(by_id.values())
+
+
 def _with_balance(invoice):
     """
     Attach the derived balance so callers never compute their own.
@@ -91,6 +110,26 @@ class InvoiceViewSet(viewsets.ViewSet):
 
         data = request.data.copy()
         data['user_id'] = str(request.user.id)
+
+        # Stamp the centre that raised this invoice.
+        #
+        # Without it an invoice is only reachable by walking children, so one
+        # raised at reception without naming a child — a registration fee taken
+        # before enrolment — never appears in any centre's Invoice History and
+        # cannot be found again afterwards.
+        centre_id = (data.get('centre_id') or '').strip() or _child_centre_id(
+            child_pk or data.get('child_id'))
+        if centre_id:
+            access = get_user_access(request.user, request)
+            # A caller must not be able to file an invoice against a centre they
+            # cannot see, whatever they put in the payload.
+            if not access.can_access_centre(centre_id):
+                return centre_not_found()
+            data['centre_id'] = str(centre_id)
+        else:
+            # An empty string is not a legal GSI key and would fail the write.
+            data.pop('centre_id', None)
+
         # The series advances only when we issue the number. A hand-typed
         # number is the caller's own and consumes nothing, which is what keeps
         # the series unbroken either way (INV-002).
@@ -307,14 +346,8 @@ def centre_invoices(request, centre_pk):
     if not centre:
         return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-    # Get all children at this centre, then their invoices
-    children = children_db.list_children(str(centre_pk))
-    child_ids = {c['id'] for c in children}
-
     # Summary stats over ALL centre invoices (before user filters)
-    all_centre_invoices = []
-    for child_id in child_ids:
-        all_centre_invoices.extend(billing_db.list_invoices(child_id=child_id))
+    all_centre_invoices = _centre_invoice_set(centre_pk)
 
     # Resolve every invoice against its ledger once, then work from that.
     # The old stored `status` field could not express Part paid, went stale
@@ -672,34 +705,38 @@ def centre_debtors(request, centre_pk):
                ('current', '0-30', '31-60', '61-90', '90+')}
     rows = []
 
-    for child in children_db.list_children(str(centre_pk)):
-        for inv in billing_db.list_invoices(child_id=child['id']):
-            enriched = _with_balance(inv)
-            balance = enriched['balance']
-            outstanding = balance['outstanding']
-            if outstanding <= 0:
-                continue
+    # Debt is owed to the centre, not to the child walk. An invoice raised
+    # without naming a child is still money owed and has to be chased.
+    children_by_id = {c['id']: c for c in children_db.list_children(str(centre_pk))}
 
-            bucket = ledger.ageing_bucket(inv, outstanding)
-            if not bucket:
-                continue
+    for inv in _centre_invoice_set(centre_pk):
+        enriched = _with_balance(inv)
+        balance = enriched['balance']
+        outstanding = balance['outstanding']
+        if outstanding <= 0:
+            continue
 
-            amount = float(outstanding)
-            buckets[bucket]['count'] += 1
-            buckets[bucket]['total'] += amount
-            rows.append({
-                'invoice_id': inv.get('id', ''),
-                'invoice_number': inv.get('number', ''),
-                'child_id': child.get('id', ''),
-                'student_name': (
-                    inv.get('student_name')
-                    or f"{child.get('first_name', '')} {child.get('last_name', '')}".strip()
-                ),
-                'due_date': inv.get('due_date', ''),
-                'outstanding': amount,
-                'status': balance['status'],
-                'bucket': bucket,
-            })
+        bucket = ledger.ageing_bucket(inv, outstanding)
+        if not bucket:
+            continue
+
+        child = children_by_id.get(inv.get('child_id')) or {}
+        amount = float(outstanding)
+        buckets[bucket]['count'] += 1
+        buckets[bucket]['total'] += amount
+        rows.append({
+            'invoice_id': inv.get('id', ''),
+            'invoice_number': inv.get('number', ''),
+            'child_id': child.get('id', ''),
+            'student_name': (
+                inv.get('student_name')
+                or f"{child.get('first_name', '')} {child.get('last_name', '')}".strip()
+            ),
+            'due_date': inv.get('due_date', ''),
+            'outstanding': amount,
+            'status': balance['status'],
+            'bucket': bucket,
+        })
 
     # Oldest debt first — that is the order it should be worked in.
     order = {'90+': 0, '61-90': 1, '31-60': 2, '0-30': 3, 'current': 4}

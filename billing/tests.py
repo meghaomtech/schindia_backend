@@ -565,7 +565,13 @@ class CentreInvoicesTests(BillingAPITestCase):
                  "student_name": "Bob", "number": "INV-3"},
             ],
         }
-        mock_billing_db.list_invoices.side_effect = lambda child_id: invoices_by_child[child_id]
+        # These predate centre_id, so they are reachable only through their
+        # child: the centre query finds nothing and the child walk must still
+        # return them.
+        mock_billing_db.list_invoices.side_effect = (
+            lambda child_id=None, user_id=None, centre_id=None:
+                invoices_by_child.get(child_id, []) if child_id else []
+        )
         # No ledger entries: these predate the ledger, so inv-3's stored
         # "Paid" is what the legacy shim in views._with_balance reads.
         mock_billing_db.list_ledger.return_value = []
