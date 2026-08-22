@@ -213,14 +213,6 @@ def send_staff_invite_email(person, role, centre_id=None):
     message = (
         f"Hello {first_name},\n\n"
         f"You have been set up on Shichida India as {where}.\n\n"
-        f"To get in for the first time:\n"
-        f"  1. Open the portal and choose \"Forgot your password?\"\n"
-        f"  2. Enter this address — {email} — and we'll email you a code\n"
-        f"  3. Use the code to choose your own password\n\n"
-        f"After that, sign in with your email and password. We'll send a "
-        f"one-time code to confirm it's you each time you log in.\n\n"
-        f"Once you are in you will see {granted} areas of the portal. "
-        f"Anything else appears locked, with a button to ask for it.\n\n"
         f"Best regards,\n"
         f"Shichida India Admin Portal"
     )

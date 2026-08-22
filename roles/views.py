@@ -532,10 +532,6 @@ def _send_onboarding_email(email, name, centre_name, role_name):
     message = (
         f"Hi {name or 'there'},\n\n"
         f"You have been added to {centre_name or 'a centre'} as a {role_name or 'team member'}.\n\n"
-        f"You can log in to the Shichida India Admin Portal using your "
-        f"registered email address. An OTP will be sent to your email for "
-        f"secure authentication.\n\n"
-        f"Login here: {frontend_url}/login\n\n"
         f"If you have any questions, please contact the centre manager.\n\n"
         f"Best regards,\n"
         f"Shichida India Admin Portal"
