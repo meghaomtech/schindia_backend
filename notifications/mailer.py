@@ -95,6 +95,27 @@ def _slot_description(slot, session, room):
     return " — ".join(parts)
 
 
+def send_child_registered_email(child, centre):
+    """Child registered successfully (onboarding email)."""
+    child_name = f"{child.get('first_name', '')} {child.get('last_name', '')}".strip()
+    centre_name = (centre or {}).get('name', '')
+
+    subject = f"Welcome to Shichida — {child_name}"
+    message = (
+        f"Dear Parent/Guardian,\n\n"
+        f"This email confirms that {child_name} has been successfully registered at {centre_name}.\n\n"
+        f"We look forward to welcoming you.\n\n"
+        f"Best regards,\n"
+        f"{centre_name}"
+    )
+
+    emails = _parent_contact_emails(child)
+    centre_id = child.get('centre_id') or (centre or {}).get('id')
+    if centre_id:
+        emails |= get_centre_admin_emails(centre_id)
+    _send(subject, message, emails)
+
+
 def send_enrolment_added_email(child, slot, session, centre, room=None):
     """Child added to a timetable slot (Req: timetable planned / child added)."""
     child_name = f"{child.get('first_name', '')} {child.get('last_name', '')}".strip()
