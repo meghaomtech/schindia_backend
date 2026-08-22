@@ -11,34 +11,59 @@ from dynamo_backend.services import children_db, centres_db, auth_db
 logger = logging.getLogger(__name__)
 
 
+PARENT_ROLES = ('Parent', 'Guardian', 'Carer')
+
+
+def invoice_recipients(invoice, child):
+    """
+    Who an invoice is addressed to.
+
+    A child's parent contacts come first — those are the people on record. When
+    there are none, the bill-payer address typed on the invoice is used: it is
+    already printed on the document as the payer, and an invoice raised before
+    a child is enrolled has no contacts to resolve at all. Refusing to send in
+    that case simply means the bill is never delivered.
+    """
+    if child:
+        from_contacts = [
+            c['email'] for c in (child.get('contacts') or [])
+            if c.get('invite_as') in PARENT_ROLES and c.get('email')
+        ]
+        if from_contacts:
+            return from_contacts
+
+    billed_to = (invoice.get('email') or '').strip()
+    return [billed_to] if billed_to else []
+
+
 def send_invoice_email(invoice):
     """
-    Send invoice email to all parents linked to the child (Req 23.1-3).
+    Send the invoice to whoever is billed for it (Req 23.1-3).
     `invoice` is a dict as returned by billing_db.get_invoice().
-    Returns list of {'email': ..., 'status': 'sent'|'failed', 'error': ...}.
-    Returns empty list with a reason if no contacts found.
+    Returns {'sent': bool, 'reason': str|None, 'results': [...]}.
     """
     child_id = invoice.get('child_id') or invoice.get('child')
     child = children_db.get_child(str(child_id)) if child_id else None
-    if not child:
-        logger.warning(f"Invoice {invoice.get('id')} has no resolvable child — not sent.")
-        return {'sent': False, 'reason': 'no_contacts', 'results': []}
 
-    centre = centres_db.get_centre(str(child['centre_id'])) if child.get('centre_id') else None
-    centre_name = centre.get('name', '') if centre else ''
-
-    parent_contacts = [
-        c for c in child.get('contacts', [])
-        if c.get('invite_as') in ('Parent', 'Guardian', 'Carer') and c.get('email')
-    ]
-
-    if not parent_contacts:
+    recipients = invoice_recipients(invoice, child)
+    if not recipients:
         logger.warning(
-            f"No parent email for child {child.get('id')} - invoice {invoice.get('number')} not sent."
+            f"Invoice {invoice.get('number') or invoice.get('id')} has no recipient — "
+            f"no parent contact and no bill-payer email. Not sent."
         )
         return {'sent': False, 'reason': 'no_contacts', 'results': []}
 
-    subject = f"Invoice for {child.get('first_name', '')} {child.get('last_name', '')} — {centre_name}"
+    # The centre comes from the child where there is one, and from the invoice's
+    # own stamp otherwise — a childless invoice still belongs to a centre.
+    centre_id = (child or {}).get('centre_id') or invoice.get('centre_id')
+    centre = centres_db.get_centre(str(centre_id)) if centre_id else None
+    centre_name = (centre.get('name', '') if centre else '') or invoice.get('center_code', '')
+
+    billed_for = (
+        f"{child.get('first_name', '')} {child.get('last_name', '')}".strip() if child else ''
+    ) or invoice.get('student_name', '')
+
+    subject = f"Invoice for {billed_for} — {centre_name}"
 
     # Build bank details text
     bank_text = ""
@@ -63,7 +88,7 @@ def send_invoice_email(invoice):
 
     message = (
         f"Dear Parent/Guardian,\n\n"
-        f"An invoice has been generated for {child.get('first_name', '')} {child.get('last_name', '')} "
+        f"An invoice has been generated for {billed_for} "
         f"at {centre_name}.\n\n"
         f"Invoice Number: {invoice.get('number', '')}\n"
         f"Total Amount: ₹{invoice.get('total_amount', 0)}\n"
@@ -75,8 +100,7 @@ def send_invoice_email(invoice):
     )
 
     results = []
-    for contact in parent_contacts:
-        email = contact['email']
+    for email in recipients:
         try:
             send_mail(
                 subject=subject,

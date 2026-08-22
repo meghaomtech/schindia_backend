@@ -149,8 +149,21 @@ class InvoiceViewSet(viewsets.ViewSet):
             data['total_amount'] = str(compute_invoice_total(data))
 
         invoice = billing_db.create_invoice(data)
-        send_invoice_email(invoice)
-        return Response(invoice, status=status.HTTP_201_CREATED)
+
+        # Say whether the invoice actually reached anyone. Saving succeeds
+        # regardless — the bill exists and is owed either way — but reception
+        # needs to know it did not arrive, or a parent is chased for something
+        # they were never sent.
+        delivery = send_invoice_email(invoice)
+        payload = dict(invoice)
+        payload['email_delivery'] = {
+            'sent': delivery.get('sent', False),
+            'reason': delivery.get('reason'),
+            'recipients': [
+                r['email'] for r in delivery.get('results', []) if r.get('status') == 'sent'
+            ],
+        }
+        return Response(payload, status=status.HTTP_201_CREATED)
 
     def partial_update(self, request, *args, **kwargs):
         invoice = billing_db.get_invoice(str(kwargs['pk']))
