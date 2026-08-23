@@ -4,7 +4,7 @@ from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import children_db, progress_db, sessions_db, centres_db
-from notifications.mailer import send_enrolment_added_email, send_enrolment_removed_email
+from notifications.mailer import send_enrolment_added_email, send_enrolment_removed_email, send_child_registered_email
 from roles.access import get_user_access, centre_not_found, permission_denied
 from .serializers import ContactSerializer, ChildEnrolmentSerializer
 
@@ -114,6 +114,12 @@ class ChildViewSet(viewsets.ViewSet):
             )
 
         child = children_db.create_child(data)
+        
+        # Send onboarding email
+        centre = centres_db.get_centre(str(child.get('centre_id'))) if child.get('centre_id') else None
+        if centre:
+            send_child_registered_email(child, centre)
+
         return Response(child, status=status.HTTP_201_CREATED)
 
     def partial_update(self, request, *args, **kwargs):
