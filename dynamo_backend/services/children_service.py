@@ -109,7 +109,21 @@ class ChildrenDynamoService:
         return enrolment
 
     def update_enrolment(self, enrolment_id, updates):
-        return self.enrolments.update(str(enrolment_id), updates)
+        old_enrolment = self.get_enrolment(enrolment_id)
+        updated = self.enrolments.update(str(enrolment_id), updates)
+
+        if old_enrolment and updated:
+            old_slot_id = old_enrolment.get('slot_id') or old_enrolment.get('slot')
+            new_slot_id = updated.get('slot_id') or updated.get('slot')
+            child_id = updated.get('child_id') or updated.get('child')
+
+            if old_slot_id != new_slot_id and child_id:
+                if old_slot_id:
+                    self._remove_child_from_slot(str(old_slot_id), str(child_id))
+                if new_slot_id:
+                    self._add_child_to_slot(str(new_slot_id), str(child_id))
+
+        return updated
 
     def delete_enrolment(self, enrolment_id):
         # Remove child from slot's child_ids before deleting
