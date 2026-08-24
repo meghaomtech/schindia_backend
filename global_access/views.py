@@ -353,12 +353,11 @@ def onboard_staff(request):
         )
 
     email = profile['email'].strip().lower()
-    if any((p.get('email') or '').strip().lower() == email
-           for p in global_access_db.list_people()):
-        return Response(
-            {'email': ['Someone with this email is already set up.']},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    
+    existing_person = next(
+        (p for p in global_access_db.list_people() if (p.get('email') or '').strip().lower() == email),
+        None
+    )
 
     name = profile.pop('name')
     profile.pop('email', None)
@@ -384,15 +383,67 @@ def onboard_staff(request):
         )
         login_created = True
 
-    # The directory entry is created either way, so People lists everyone
-    # regardless of which kind of role they hold.
-    person = global_access_db.add_person(
-        name, email, role_id,
-        member_type=member_type,
-        profile=profile,
-        centre_id=None,
-        include_sub_centres=assignment.get('include_sub_centres', False),
-    )
+    if existing_person:
+        person = global_access_db.update_person(existing_person['id'], profile)
+        person['email'] = email
+        person['name'] = name
+        person['roles'] = existing_person.get('roles', [])
+        
+        if not centre_role:
+            assignment_res = global_access_db.assign_role(
+                person['id'], role_id,
+                centre_id=centre_id, include_sub_centres=assignment.get('include_sub_centres', False)
+            )
+            if assignment_res is None:
+                return Response(
+                    {'email': ['This person is already assigned to this role.']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            person['roles'].append({
+                'assignment_id': assignment_res['id'],
+                'role_id': str(role_id),
+                'centre_id': centre_id,
+                'include_sub_centres': assignment.get('include_sub_centres', False),
+            })
+    else:
+        # The directory entry is created either way, so People lists everyone
+        # regardless of which kind of role they hold.
+        person = global_access_db.add_person(
+            name, email, role_id,
+            member_type=member_type,
+            profile=profile,
+            centre_id=centre_id,
+            include_sub_centres=assignment.get('include_sub_centres', False),
+        )
+
+    # A centre role's membership lives in the roles app, which is what the
+    # per-centre permission checks read — the directory row alone would grant
+    # nothing at the centre.
+    if centre_role:
+        # Check per-centre uniqueness: user can't be in multiple roles at same centre
+        if centre_id:
+            all_roles = roles_db.list_roles(centre_id)
+            user_login_id = str((login_user or {}).get('id'))
+            for r in all_roles:
+                for m in r.get('members', []):
+                    if m.get('user_id') == user_login_id:
+                        return Response(
+                            {'email': ['This person already has a role at this centre.']},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
+        # Must be the *login* user's id, not the directory person's — that's
+        # what roles.access._resolve_user_access matches members against when
+        # it works out what this user may do. Passing person['id'] silently
+        # grants nothing.
+        result = roles_db.add_member(
+            role_id, (login_user or {}).get('id'), name=name, email=email
+        )
+        if result is None:
+            return Response(
+                {'email': ['This person is already in this role.']},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
     invite = {'sent': False, 'reason': 'not_requested'}
     if serializer.validated_data.get('send_invite', True):
