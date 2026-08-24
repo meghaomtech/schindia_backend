@@ -508,33 +508,37 @@ def centre_payments(request, centre_pk):
     if not centre:
         return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-    children = children_db.list_children(str(centre_pk))
+    children_by_id = {c['id']: c for c in children_db.list_children(str(centre_pk))}
 
     # Real payment records, not invoices flagged paid. The old version could
     # only ever show one full-value payment per invoice, dated whenever the
     # row was last touched — so partial payments were invisible and the date
     # was whatever `updated_at` happened to be.
+    #
+    # Reached through _centre_invoice_set, not a child walk. Money taken
+    # against an invoice raised without a child was recorded in the ledger and
+    # counted in the balance, but never appeared here — so the invoice showed
+    # as part paid while the Payments tab claimed nothing had been received.
     payments = []
-    for child in children:
-        for inv in billing_db.list_invoices(child_id=child['id']):
-            entries = billing_db.list_ledger(inv['id'])
-            student_name = (
-                inv.get('student_name')
-                or f"{child.get('first_name', '')} {child.get('last_name', '')}".strip()
-            )
-            for e in entries:
-                if e.get('kind') != ledger.PAYMENT:
-                    continue
-                payments.append({
-                    'id': e.get('id', ''),
-                    'invoice_id': inv.get('id', ''),
-                    'invoice_number': inv.get('number', ''),
-                    'student_name': student_name,
-                    'amount': float(e.get('amount') or 0),
-                    'method': e.get('method', ''),
-                    'payment_date': e.get('occurred_on', ''),
-                    'due_date': inv.get('due_date', ''),
-                })
+    for inv in _centre_invoice_set(centre_pk):
+        child = children_by_id.get(inv.get('child_id')) or {}
+        student_name = (
+            inv.get('student_name')
+            or f"{child.get('first_name', '')} {child.get('last_name', '')}".strip()
+        )
+        for e in billing_db.list_ledger(inv['id']):
+            if e.get('kind') != ledger.PAYMENT:
+                continue
+            payments.append({
+                'id': e.get('id', ''),
+                'invoice_id': inv.get('id', ''),
+                'invoice_number': inv.get('number', ''),
+                'student_name': student_name,
+                'amount': float(e.get('amount') or 0),
+                'method': e.get('method', ''),
+                'payment_date': e.get('occurred_on', ''),
+                'due_date': inv.get('due_date', ''),
+            })
 
     payments.sort(key=lambda p: p['payment_date'], reverse=True)
     return Response({'payments': payments})

@@ -739,12 +739,16 @@ class CentrePaymentsTests(BillingAPITestCase):
             {"id": "child-a", "first_name": "Alice", "last_name": "A"},
             {"id": "child-b", "first_name": "Bob", "last_name": "B"},
         ]
-        mock_billing_db.list_invoices.side_effect = lambda child_id: {
-            "child-a": [{"id": "inv-1", "number": "INV-1", "total_amount": "100",
-                         "due_date": "2026-01-10"}],
-            "child-b": [{"id": "inv-3", "number": "INV-3", "total_amount": "200",
-                         "due_date": "2026-02-10"}],
-        }[child_id]
+        # Reachable only through their child: these carry no centre_id, so the
+        # centre query returns nothing and the child walk still has to find them.
+        mock_billing_db.list_invoices.side_effect = (
+            lambda child_id=None, user_id=None, centre_id=None: {
+                "child-a": [{"id": "inv-1", "number": "INV-1", "total_amount": "100",
+                             "due_date": "2026-01-10"}],
+                "child-b": [{"id": "inv-3", "number": "INV-3", "total_amount": "200",
+                             "due_date": "2026-02-10"}],
+            }.get(child_id, [])
+        )
         mock_billing_db.list_ledger.side_effect = lambda invoice_id: {
             "inv-1": [
                 {"id": "p1", "kind": "payment", "amount": "40",
@@ -792,9 +796,12 @@ class CentrePaymentsTests(BillingAPITestCase):
         mock_children_db.list_children.return_value = [
             {"id": "child-a", "first_name": "Alice", "last_name": "A"},
         ]
+        # child_id is set because the child_id-index only ever returns rows
+        # whose child_id matches — an invoice reached through a child always
+        # carries that link, and it is what the name falls back through.
         mock_billing_db.list_invoices.return_value = [
             {"id": "inv-1", "number": "INV-1", "total_amount": "100",
-             "due_date": "2026-01-10"},
+             "due_date": "2026-01-10", "child_id": "child-a"},
         ]
         mock_billing_db.list_ledger.return_value = [
             {"id": "p1", "kind": "payment", "amount": "100", "occurred_on": "2026-01-05"},

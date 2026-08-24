@@ -168,6 +168,28 @@ class CentreInvoiceListingTests(SimpleTestCase):
 
         self.assertIn("BA260001", [i.get("number") for i in res.data["invoices"]])
 
+    def test_payments_tab_shows_money_taken_on_a_childless_invoice(self, db, kids, centres, access):
+        # Reported bug: recording a payment from Manage left the invoice
+        # showing part paid while the Payments tab claimed nothing had come in.
+        paid = {"id": "inv-walkin", "number": "BA260002", "centre_id": CENTRE_ID,
+                "child_id": None, "student_name": "LM jh",
+                "total_amount": "23600", "due_date": "2026-09-30"}
+        self._wire(db, kids, centres, access, by_centre=[paid])
+        db.list_ledger.return_value = [
+            {"id": "led-1", "kind": "payment", "amount": "10000",
+             "occurred_on": "2026-08-24", "method": "upi"},
+        ]
+
+        res = self.client.get(f"/api/v1/centres/{CENTRE_ID}/invoices/payments/")
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        rows = res.data["payments"]
+        self.assertEqual([r["invoice_number"] for r in rows], ["BA260002"])
+        self.assertEqual(rows[0]["amount"], 10000.0)
+        self.assertEqual(rows[0]["payment_date"], "2026-08-24")
+        # The name has to come off the invoice, since there is no child record.
+        self.assertEqual(rows[0]["student_name"], "LM jh")
+
     def test_debtors_chases_a_childless_invoice(self, db, kids, centres, access):
         overdue = {"id": "inv-walkin", "number": "BA260010", "centre_id": CENTRE_ID,
                    "child_id": None, "student_name": "Walk-in",
