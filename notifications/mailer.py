@@ -95,6 +95,27 @@ def _slot_description(slot, session, room):
     return " — ".join(parts)
 
 
+def send_child_registered_email(child, centre):
+    """Child registered successfully (onboarding email)."""
+    child_name = f"{child.get('first_name', '')} {child.get('last_name', '')}".strip()
+    centre_name = (centre or {}).get('name', '')
+
+    subject = f"Welcome to Shichida — {child_name}"
+    message = (
+        f"Dear Parent/Guardian,\n\n"
+        f"This email confirms that {child_name} has been successfully registered at {centre_name}.\n\n"
+        f"We look forward to welcoming you.\n\n"
+        f"Best regards,\n"
+        f"{centre_name}"
+    )
+
+    emails = _parent_contact_emails(child)
+    centre_id = child.get('centre_id') or (centre or {}).get('id')
+    if centre_id:
+        emails |= get_centre_admin_emails(centre_id)
+    _send(subject, message, emails)
+
+
 def send_enrolment_added_email(child, slot, session, centre, room=None):
     """Child added to a timetable slot (Req: timetable planned / child added)."""
     child_name = f"{child.get('first_name', '')} {child.get('last_name', '')}".strip()
@@ -213,14 +234,6 @@ def send_staff_invite_email(person, role, centre_id=None):
     message = (
         f"Hello {first_name},\n\n"
         f"You have been set up on Shichida India as {where}.\n\n"
-        f"To get in for the first time:\n"
-        f"  1. Open the portal and choose \"Forgot your password?\"\n"
-        f"  2. Enter this address — {email} — and we'll email you a code\n"
-        f"  3. Use the code to choose your own password\n\n"
-        f"After that, sign in with your email and password. We'll send a "
-        f"one-time code to confirm it's you each time you log in.\n\n"
-        f"Once you are in you will see {granted} areas of the portal. "
-        f"Anything else appears locked, with a button to ask for it.\n\n"
         f"Best regards,\n"
         f"Shichida India Admin Portal"
     )

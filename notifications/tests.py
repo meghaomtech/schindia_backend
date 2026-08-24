@@ -247,3 +247,38 @@ class PermissionUpdatedEmailTests(SimpleTestCase):
         mailer.send_permission_updated_email(role, [('children.view_info', {'visible': True, 'edit': False})])
 
         mock_send_mail.assert_not_called()
+
+
+# =============================================================================
+# send_staff_invite_email
+# =============================================================================
+
+@patch('notifications.mailer.send_mail')
+@patch('notifications.mailer.roles_db')
+@patch('notifications.mailer.centres_db')
+class SendStaffInviteEmailTests(SimpleTestCase):
+    def test_email_sent_without_login_instructions(self, mock_centres_db, mock_roles_db, mock_send_mail):
+        mock_centres_db.get_centre.return_value = {'id': CENTRE_ID, 'name': 'Centre A'}
+        person = {'email': 'staff@example.com', 'name': 'John Doe'}
+        role = basic_role(members=[])
+
+        result = mailer.send_staff_invite_email(person, role, CENTRE_ID)
+
+        self.assertTrue(result['sent'])
+        self.assertIsNone(result['reason'])
+        
+        mock_send_mail.assert_called_once()
+        subject = mock_send_mail.call_args.kwargs['subject']
+        message = mock_send_mail.call_args.kwargs['message']
+        
+        # Verify subject and basic info
+        self.assertEqual(subject, "You have been set up on Shichida India — Teacher at Centre A")
+        self.assertIn("Hello John", message)
+        self.assertIn("You have been set up on Shichida India as Teacher at Centre A.", message)
+        
+        # Verify login/OTP instructions are NOT present
+        self.assertNotIn("Forgot your password?", message)
+        self.assertNotIn("choose your own password", message)
+        self.assertNotIn("sign in with your email and password", message)
+        self.assertNotIn("one-time code", message)
+        self.assertNotIn("areas of the portal", message)

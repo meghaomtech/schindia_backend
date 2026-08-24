@@ -239,6 +239,24 @@ class ChildCreateTests(ChildrenAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
 
 
+@patch('children.views.send_child_registered_email')
+@patch('children.views.centres_db')
+@patch('children.views.children_db')
+class ChildCreateEmailHookTests(ChildrenAPITestCase):
+    def test_create_success_sends_onboarding_email(self, mock_children_db, mock_centres_db, mock_send_email):
+        mock_children_db.create_child.return_value = {"id": CHILD_ID, "centre_id": CENTRE_ID, **VALID_CHILD_PAYLOAD}
+        mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "name": "Test Centre"}
+        
+        payload = {**VALID_CHILD_PAYLOAD, "centre": CENTRE_ID}
+        resp = self.client.post('/api/v1/children/', payload, format='json')
+        
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        mock_send_email.assert_called_once_with(
+            mock_children_db.create_child.return_value,
+            mock_centres_db.get_centre.return_value
+        )
+
+
 # =============================================================================
 # ChildViewSet: partial_update
 # =============================================================================
