@@ -135,8 +135,8 @@ class GlobalAccessDynamoService:
     def get_person(self, person_id):
         return self.people.get(str(person_id))
 
-    def add_person(self, name, email, role_id, member_type='person',
-                   profile=None, centre_id=None, include_sub_centres=False):
+    def add_person(self, name, email, role_id=None, member_type='person',
+                   profile=None, centre_id=None, include_sub_centres=False, create_assignment=True):
         """
         Create a person and assign them to a global role in one step.
 
@@ -148,16 +148,20 @@ class GlobalAccessDynamoService:
         record = {'name': name, 'email': email, 'member_type': member_type}
         record.update(profile or {})
         person = self.people.create(record)
-        assignment = self.assign_role(
-            person['id'], role_id,
-            centre_id=centre_id, include_sub_centres=include_sub_centres,
-        )
-        person['roles'] = [{
-            'assignment_id': assignment['id'],
-            'role_id': str(role_id),
-            'centre_id': centre_id,
-            'include_sub_centres': include_sub_centres,
-        }]
+        
+        person['roles'] = []
+        if create_assignment and role_id:
+            assignment = self.assign_role(
+                person['id'], role_id,
+                centre_id=centre_id, include_sub_centres=include_sub_centres,
+            )
+            if assignment:
+                person['roles'].append({
+                    'assignment_id': assignment['id'],
+                    'role_id': str(role_id),
+                    'centre_id': centre_id,
+                    'include_sub_centres': include_sub_centres,
+                })
         return person
 
     def update_person(self, person_id, updates):

@@ -335,15 +335,12 @@ def onboard_staff(request):
     role_id = str(assignment['role_id'])
     role = global_access_db.get_role(role_id)
     
+    centre_role = None
     if not role:
         # Check if they are mistakenly trying to onboard a centre-specific role
         centre_role = roles_db.get_role(role_id)
-        if centre_role:
-            return Response(
-                {'role_id': ['Centre-specific roles cannot be created from Global Settings.']},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        return Response({'role_id': ['Role not found.']}, status=status.HTTP_404_NOT_FOUND)
+        if not centre_role:
+            return Response({'role_id': ['Role not found.']}, status=status.HTTP_404_NOT_FOUND)
 
     centre_id = assignment.get('centre_id') or None
     if role and centre_id:
@@ -364,6 +361,9 @@ def onboard_staff(request):
     member_type = profile.pop('member_type', 'person')
     if profile.get('start_date'):
         profile['start_date'] = profile['start_date'].isoformat()
+    
+    # Set the staff_scope based on the role assigned during onboarding
+    profile['staff_scope'] = 'centre' if centre_role else 'global'
 
     # A directory entry alone can't sign in — login looks the email up in the
     # users table. Create the account here, approved, with a random password
@@ -414,6 +414,7 @@ def onboard_staff(request):
             profile=profile,
             centre_id=centre_id,
             include_sub_centres=assignment.get('include_sub_centres', False),
+            create_assignment=not centre_role,
         )
 
     # A centre role's membership lives in the roles app, which is what the

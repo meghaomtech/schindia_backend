@@ -69,6 +69,9 @@ class StaffProfileSerializer(serializers.Serializer):
     member_type = serializers.ChoiceField(
         choices=['person', 'organisation'], required=False, default='person'
     )
+    staff_scope = serializers.ChoiceField(
+        choices=['global', 'centre'], required=False, default='global'
+    )
 
     def validate_name(self, value):
         # The wizard shows "Enter their name." for this case; keep parity.
