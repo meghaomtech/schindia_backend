@@ -99,8 +99,13 @@ def derive_status(invoice, total, outstanding, write_offs, payments, today=None)
         return VOID
 
     if outstanding <= 0:
-        # Wholly forgiven is not the same as settled — the money never arrived.
-        if write_offs > 0 and payments <= 0:
+        # A write-off is not a payment. It marks an unpaid amount uncollectible
+        # and removes it from the receivable — the money never arrived. So any
+        # invoice carrying one was not collected in full and must not report as
+        # Paid, however small the forgiven part was. ₹9,500 received against a
+        # ₹10,000 invoice with ₹500 written off is ₹9,500 collected, not
+        # ₹10,000, and reporting decides real things.
+        if write_offs > 0:
             return WRITTEN_OFF
         return PAID
 

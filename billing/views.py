@@ -643,6 +643,22 @@ def _record(request, invoice_pk, kind):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+    # Writing off marks an *unpaid* amount uncollectible, and a credit note
+    # reduces what is still owed — neither can exceed the outstanding balance.
+    # Without this the balance merely clamps at zero while the written-off and
+    # credited figures record whatever was sent, so "what did we forgive this
+    # year" answers with a number nobody owed. The dialog caps it too, but a
+    # stale screen, a double submit or a direct call would not.
+    if kind in (ledger.WRITE_OFF, ledger.CREDIT_NOTE):
+        outstanding = _balance_for(invoice)['outstanding']
+        if data['amount'] > outstanding:
+            noun = 'written off' if kind == ledger.WRITE_OFF else 'credited'
+            return Response(
+                {'amount': [f'Only {outstanding} is still owed, so no more than '
+                            f'that can be {noun}.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     occurred = data.get('occurred_on')
     entry = billing_db.add_ledger_entry(
         invoice['id'], kind, data['amount'],

@@ -154,6 +154,40 @@ class LedgerRecordingTests(SimpleTestCase):
         self.assertIn('amount', res.json())
         db.add_ledger_entry.assert_not_called()
 
+    def test_a_write_off_cannot_exceed_what_is_still_owed(self, db, access):
+        # Writing off marks an *unpaid* amount uncollectible. Accepting more
+        # leaves the balance clamped at zero while the written-off figure
+        # records money nobody ever owed.
+        access.return_value = access_allowing('finance.write_off_invoices')
+        db.get_invoice.return_value = invoice()  # total 1000
+        db.list_ledger.return_value = [{'kind': 'payment', 'amount': '900'}]
+
+        res = self._post('write-offs', {'amount': '500', 'reason': 'uncollectable'})
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('amount', res.json())
+        db.add_ledger_entry.assert_not_called()
+
+    def test_writing_off_exactly_what_is_owed_is_allowed(self, db, access):
+        access.return_value = access_allowing('finance.write_off_invoices')
+        db.get_invoice.return_value = invoice()  # total 1000
+        db.list_ledger.return_value = [{'kind': 'payment', 'amount': '900'}]
+        db.add_ledger_entry.return_value = {'id': 'e1'}
+
+        res = self._post('write-offs', {'amount': '100', 'reason': 'below_threshold'})
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+    def test_a_credit_note_cannot_exceed_what_is_still_owed(self, db, access):
+        access.return_value = access_allowing('finance.manage_bill_payer_credits')
+        db.get_invoice.return_value = invoice()  # total 1000
+        db.list_ledger.return_value = []
+
+        res = self._post('credit-notes', {'amount': '5000', 'reason': 'goodwill'})
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        db.add_ledger_entry.assert_not_called()
+
     def test_nothing_can_be_recorded_against_a_cancelled_invoice(self, db, access):
         access.return_value = access_allowing('finance.manage_bill_payer_payments')
         db.get_invoice.return_value = invoice(cancelled_at='2026-08-19T10:00:00')

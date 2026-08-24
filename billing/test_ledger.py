@@ -60,11 +60,27 @@ class ComputeBalanceTests(SimpleTestCase):
         self.assertEqual(b['outstanding'], Decimal('0'))
         self.assertEqual(b['status'], WRITTEN_OFF)
 
-    def test_part_paid_then_forgiven_reads_as_paid_not_written_off(self):
-        """Money did arrive, so this isn't a pure write-off."""
+    def test_part_paid_then_forgiven_is_written_off_not_paid(self):
+        """
+        A write-off is not a payment.
+
+        ₹400 arrived and ₹600 was declared uncollectible. Reporting this as
+        Paid claims ₹1000 was collected when ₹400 was — the balance reaches
+        zero only because the rest was given up on.
+        """
         b = compute_balance(
             invoice(), [entry(PAYMENT, '400'), entry(WRITE_OFF, '600')], today=TODAY)
-        self.assertEqual(b['status'], PAID)
+        self.assertEqual(b['status'], WRITTEN_OFF)
+        self.assertEqual(b['paid'], Decimal('400'))
+        self.assertEqual(b['written_off'], Decimal('600'))
+
+    def test_a_mostly_paid_invoice_with_a_small_write_off_is_not_paid(self):
+        # ₹9,500 of ₹10,000 received and ₹500 given up on: still not collected
+        # in full, however small the forgiven part.
+        b = compute_balance(
+            invoice(total='10000'),
+            [entry(PAYMENT, '9500'), entry(WRITE_OFF, '500')], today=TODAY)
+        self.assertEqual(b['status'], WRITTEN_OFF)
 
     def test_a_cancelled_invoice_is_owed_by_nobody(self):
         b = compute_balance(
