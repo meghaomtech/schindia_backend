@@ -39,7 +39,10 @@ urlpatterns = [
     ),
     path(
         'children/<uuid:child_pk>/enrolments/<uuid:pk>/',
-        views.EnrolmentViewSet.as_view({'delete': 'destroy'}),
+        # partial_update is implemented on the viewset — access checks and the
+        # rescheduled notification included — but was never mapped here, so
+        # moving a child to another slot answered 405.
+        views.EnrolmentViewSet.as_view({'patch': 'partial_update', 'delete': 'destroy'}),
         name='child-enrolments-detail'
     ),
 ]
