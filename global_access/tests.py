@@ -8,6 +8,7 @@ global_access.views, and force_authenticate() instead of real JWTs. Like catalog
 these views sit behind IsAuthenticated + IsApprovedUser only — no roles.access
 enforcement layer to mock.
 """
+import io
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
@@ -462,6 +463,74 @@ class RemovePersonTests(GlobalAccessAPITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
         mock_db.remove_person.assert_not_called()
+
+
+@patch('global_access.views.default_storage')
+@patch('global_access.views.global_access_db')
+class StaffDocumentTests(GlobalAccessAPITestCase):
+    """
+    GET /api/v1/global/people/<id>/documents/<index>/
+
+    Aadhaar cards and passports. Addressed by position on the person's own
+    record so a storage key can never arrive from the caller.
+    """
+
+    def _person(self):
+        return {
+            'id': PERSON_ID, 'name': 'Priya', 'email': 'p@x.com',
+            'documents': [
+                {'name': 'Aadhaar card', 'key': 'staff-documents/abc/aadhaar.pdf',
+                 'content_type': 'application/pdf'},
+            ],
+        }
+
+    def test_opens_the_document_recorded_against_that_person(self, mock_db, storage):
+        self.client.force_authenticate(user=FakeUser(role='admin'))
+        mock_db.get_person.return_value = self._person()
+        storage.open.return_value = io.BytesIO(b'%PDF-1.4 fake')
+
+        resp = self.client.get(f'/api/v1/global/people/{PERSON_ID}/documents/0/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        # The key came off the record, not the request.
+        storage.open.assert_called_once_with('staff-documents/abc/aadhaar.pdf')
+        self.assertEqual(resp['Content-Type'], 'application/pdf')
+
+    def test_needs_the_identity_documents_capability(self, mock_db, storage):
+        # The same capability that decides whether documents are even listed.
+        mock_db.get_person.return_value = self._person()
+
+        resp = self.client.get(f'/api/v1/global/people/{PERSON_ID}/documents/0/')
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        storage.open.assert_not_called()
+
+    def test_an_index_beyond_their_documents_is_not_found(self, mock_db, storage):
+        self.client.force_authenticate(user=FakeUser(role='admin'))
+        mock_db.get_person.return_value = self._person()
+
+        resp = self.client.get(f'/api/v1/global/people/{PERSON_ID}/documents/7/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        storage.open.assert_not_called()
+
+    def test_unknown_person_is_not_found(self, mock_db, storage):
+        self.client.force_authenticate(user=FakeUser(role='admin'))
+        mock_db.get_person.return_value = None
+
+        resp = self.client.get(f'/api/v1/global/people/{PERSON_ID}/documents/0/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        storage.open.assert_not_called()
+
+    def test_a_missing_file_reports_not_found_rather_than_a_500(self, mock_db, storage):
+        self.client.force_authenticate(user=FakeUser(role='admin'))
+        mock_db.get_person.return_value = self._person()
+        storage.open.side_effect = FileNotFoundError('gone')
+
+        resp = self.client.get(f'/api/v1/global/people/{PERSON_ID}/documents/0/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
 
 @patch('global_access.views.global_access_db')

@@ -15,6 +15,8 @@ urlpatterns = [
     path('global/people/documents/upload/', views.upload_staff_document,
          name='global-people-document-upload'),
     path('global/people/<uuid:person_pk>/', views.person_detail, name='global-person-detail'),
+    path('global/people/<uuid:person_pk>/documents/<int:index>/', views.staff_document,
+         name='global-staff-document'),
     path('global/people/<uuid:person_pk>/roles/', views.assign_role, name='global-people-assign-role'),
     path('global/assignments/<uuid:assignment_pk>/', views.remove_assignment, name='global-assignment-remove'),
     path('global/permissions-matrix/', views.permissions_matrix, name='global-permissions-matrix'),

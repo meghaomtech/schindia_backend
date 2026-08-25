@@ -3,6 +3,7 @@ import secrets
 import uuid
 
 from django.core.files.storage import default_storage
+from django.http import FileResponse
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.parsers import MultiPartParser
@@ -570,3 +571,55 @@ def upload_staff_document(request):
         'size': upload.size,
         'content_type': upload.content_type,
     }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsApprovedUser])
+def staff_document(request, person_pk, index):
+    """
+    Open one of a person's supporting documents.
+
+    Addressed by the person and the document's position on their record, never
+    by storage key. A key supplied by the caller would be a way to read any
+    object in the bucket — these are Aadhaar cards and passports, so the only
+    keys this will open are the ones already recorded against that person.
+
+    Gated on the same capability that uploads them and that _visible_person
+    requires to return them at all: someone who cannot see a document listed
+    cannot fetch it either.
+    """
+    if not has_global_capability(request.user, 'staff_identity_documents', request=request):
+        return Response(
+            {'detail': 'You do not have permission to view staff documents.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    person = global_access_db.get_person(str(person_pk))
+    if not person:
+        return Response({'detail': 'Person not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    documents = person.get('documents') or []
+    if index < 0 or index >= len(documents):
+        return Response({'detail': 'Document not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    document = documents[index] or {}
+    key = document.get('key')
+    if not key:
+        return Response({'detail': 'Document not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        handle = default_storage.open(key)
+    except Exception as e:
+        logger.error(f"Staff document {key} could not be read: {e}", exc_info=True)
+        return Response(
+            {'detail': 'That file could not be read.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    # Inline so a PDF or image opens in the browser rather than downloading.
+    return FileResponse(
+        handle,
+        content_type=document.get('content_type') or 'application/octet-stream',
+        as_attachment=False,
+        filename=document.get('name') or 'document',
+    )
