@@ -402,6 +402,13 @@ def onboard_staff(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # A centre role belongs to exactly one centre, so it can say which even
+    # when the caller did not. Without this the per-centre uniqueness check
+    # below is skipped whenever centre_id was omitted, and the invite cannot
+    # name where the person has been set up.
+    if centre_role and not centre_id:
+        centre_id = centre_role.get('centre_id')
+
     email = profile['email'].strip().lower()
     
     existing_person = next(

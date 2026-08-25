@@ -734,14 +734,55 @@ class OnboardStaffTests(SimpleTestCase):
         db.list_people.return_value = people or []
         db.add_person.return_value = {'id': PERSON_ID, **_profile(), 'roles': []}
 
-    def test_centre_role_is_rejected(self, db, roles, auth):
-        """Centre-specific roles cannot be created via the Global Settings onboarding endpoint."""
+    def test_a_centre_role_creates_membership_in_the_roles_app(self, db, roles, auth):
+        """
+        Centre roles are onboarded through here too — it is what backs Add
+        person on a centre's Roles tab.
+
+        The directory row alone grants nothing at a centre: the per-centre
+        permission checks read membership from the roles app, so both have to
+        be written.
+        """
         self._centre(db, roles)
+        roles.list_roles.return_value = []
+        auth.get_user_by_email.return_value = None
+        auth.create_user.return_value = {'id': 'login-1'}
+
         res = self.client.post(self.URL, _payload(
+            assignment={'role_id': 'r-teacher-c1', 'centre_id': CENTRE_ID}), format="json")
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        db.add_person.assert_called_once()
+        # Membership must key on the *login* user, not the directory person —
+        # that is what roles.access matches against.
+        self.assertEqual(roles.add_member.call_args[0][1], 'login-1')
+
+    def test_a_centre_role_finds_its_own_centre(self, db, roles, auth):
+        # Omitting centre_id must not skip the one-role-per-centre check: the
+        # role itself says which centre it belongs to.
+        self._centre(db, roles)
+        roles.list_roles.return_value = []
+        auth.get_user_by_email.return_value = None
+        auth.create_user.return_value = {'id': 'login-1'}
+
+        self.client.post(self.URL, _payload(
             assignment={'role_id': 'r-teacher-c1'}), format="json")
+
+        roles.list_roles.assert_called_once_with(CENTRE_ID)
+
+    def test_the_same_person_cannot_hold_two_roles_at_one_centre(self, db, roles, auth):
+        self._centre(db, roles)
+        auth.get_user_by_email.return_value = {'id': 'login-1'}
+        roles.list_roles.return_value = [
+            centre_role(role_id='r-manager-c1', name='Manager') | {
+                'members': [{'user_id': 'login-1'}]
+            }
+        ]
+
+        res = self.client.post(self.URL, _payload(
+            assignment={'role_id': 'r-teacher-c1', 'centre_id': CENTRE_ID}), format="json")
+
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('Centre-specific roles cannot be created from Global Settings', str(res.json()))
-        db.add_person.assert_not_called()
         roles.add_member.assert_not_called()
 
     def test_global_role_rejects_a_centre(self, db, roles, auth):
@@ -766,10 +807,35 @@ class OnboardStaffTests(SimpleTestCase):
         res = self.client.post(self.URL, _payload(), format="json")
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_duplicate_email_is_rejected(self, db, roles, auth):
+    def test_an_existing_person_gains_the_role_rather_than_a_second_record(self, db, roles, auth):
+        """
+        One person, many roles.
+
+        Someone already in the directory being given another role is an
+        ordinary thing — a teacher who also runs a centre — so a known email
+        adds the assignment instead of refusing, and does not create a
+        duplicate directory row. Matching ignores case.
+        """
         self._global(db, roles, people=[{'id': 'x', 'email': 'ANSHAL570@gmail.com', 'roles': []}])
+        db.assign_role.return_value = {'id': ASSIGNMENT_ID}
+        db.update_person.return_value = {'id': 'x'}
+
         res = self.client.post(self.URL, _payload(
             assignment={'role_id': ROLE_ID}), format="json")
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        db.add_person.assert_not_called()
+        db.assign_role.assert_called_once()
+
+    def test_the_same_global_role_twice_is_refused(self, db, roles, auth):
+        # assign_role returns None when that role is already held at that scope.
+        self._global(db, roles, people=[{'id': 'x', 'email': 'anshal570@gmail.com', 'roles': []}])
+        db.assign_role.return_value = None
+        db.update_person.return_value = {'id': 'x'}
+
+        res = self.client.post(self.URL, _payload(
+            assignment={'role_id': ROLE_ID}), format="json")
+
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('email', res.json())
 
