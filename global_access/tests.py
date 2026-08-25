@@ -797,6 +797,34 @@ class OnboardStaffTests(SimpleTestCase):
         res = self.client.post(self.URL, _payload(), format="json")
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
+    @patch("global_access.views.send_staff_invite_email")
+    def test_the_invite_names_the_centre_role_that_was_assigned(self, invite, db, roles, auth):
+        # Assigning Teacher and being told you are a "staff member" is what
+        # this guards: the global lookup is None for a centre role, so passing
+        # it to the invite fell through to that wording.
+        self._centre(db, roles)
+        invite.return_value = {'sent': True, 'reason': None, 'results': []}
+
+        self.client.post(self.URL, _payload(
+            assignment={'role_id': 'r-teacher-c1', 'centre_id': CENTRE_ID}, send_invite=True), format="json")
+
+        invite.assert_called_once()
+        _person, sent_role, sent_centre = invite.call_args[0]
+        self.assertEqual((sent_role or {}).get('name'), 'Teacher')
+        self.assertEqual(sent_centre, CENTRE_ID)
+
+    @patch("global_access.views.send_staff_invite_email")
+    def test_the_invite_still_names_a_global_role(self, invite, db, roles, auth):
+        self._global(db, roles)
+        invite.return_value = {'sent': True, 'reason': None, 'results': []}
+
+        self.client.post(self.URL, _payload(assignment={'role_id': ROLE_ID}, send_invite=True), format="json")
+
+        _person, sent_role, sent_centre = invite.call_args[0]
+        self.assertEqual((sent_role or {}).get('name'), 'Regional Head')
+        # Organisation-wide, so there is no centre to name.
+        self.assertIsNone(sent_centre)
+
 
 class StaffFieldVisibilityTests(SimpleTestCase):
     """Regulated fields must never leave the API without the capability."""

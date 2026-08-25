@@ -501,7 +501,12 @@ def onboard_staff(request):
 
     invite = {'sent': False, 'reason': 'not_requested'}
     if serializer.validated_data.get('send_invite', True):
-        invite = send_staff_invite_email(person, role, None)
+        # Whichever table the role came from. `role` is the global lookup and
+        # is None for a centre role, so passing it alone made every centre
+        # invite fall back to "staff member" — someone assigned Teacher was
+        # told they were staff. The centre goes too, or the invite cannot say
+        # where they have been set up.
+        invite = send_staff_invite_email(person, role or centre_role, centre_id)
 
     return Response(
         {
