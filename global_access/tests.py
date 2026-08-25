@@ -436,10 +436,122 @@ class RemoveAssignmentTests(GlobalAccessAPITestCase):
 @patch('global_access.views.global_access_db')
 class RemovePersonTests(GlobalAccessAPITestCase):
     def test_success(self, mock_db):
+        # 'admin' is unrestricted, so the capability check passes.
+        self.client.force_authenticate(user=FakeUser(role='admin'))
+        mock_db.get_person.return_value = {'id': PERSON_ID, 'name': 'A', 'email': 'a@b.c'}
+
         resp = self.client.delete(f'/api/v1/global/people/{PERSON_ID}/')
 
         self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
         mock_db.remove_person.assert_called_once_with(PERSON_ID)
+
+    def test_deleting_needs_the_staff_capability(self, mock_db):
+        # Deleting a staff record used to be open to any approved user.
+        mock_db.get_person.return_value = {'id': PERSON_ID, 'name': 'A', 'email': 'a@b.c'}
+
+        resp = self.client.delete(f'/api/v1/global/people/{PERSON_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        mock_db.remove_person.assert_not_called()
+
+    def test_unknown_person_is_not_found(self, mock_db):
+        self.client.force_authenticate(user=FakeUser(role='admin'))
+        mock_db.get_person.return_value = None
+
+        resp = self.client.delete(f'/api/v1/global/people/{PERSON_ID}/')
+
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        mock_db.remove_person.assert_not_called()
+
+
+@patch('global_access.views.global_access_db')
+class PersonDetailTests(GlobalAccessAPITestCase):
+    """
+    GET / PATCH /api/v1/global/people/<id>/
+
+    Opening a person shows what was saved when they were onboarded, and
+    correcting it respects the same field rules as creating them.
+    """
+
+    URL = f'/api/v1/global/people/{PERSON_ID}/'
+
+    def _person(self, **over):
+        base = {
+            'id': PERSON_ID, 'name': 'Anshal Aggarwal', 'email': 'anshal570@gmail.com',
+            'job_title': 'Teacher', 'phone': '9876543210',
+            'aadhaar_number': '123412341234', 'pan': 'ABCDE1234F',
+            'bank_details': {'bank_name': 'HDFC'},
+        }
+        base.update(over)
+        return base
+
+    def test_returns_the_saved_record(self, mock_db):
+        self.client.force_authenticate(user=FakeUser(role='admin'))
+        mock_db.get_person.return_value = self._person()
+
+        resp = self.client.get(self.URL)
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['job_title'], 'Teacher')
+        self.assertEqual(resp.data['phone'], '9876543210')
+
+    def test_hides_regulated_fields_from_a_caller_without_the_capability(self, mock_db):
+        # The same rule the directory listing applies — opening one person
+        # must not become a way around it.
+        mock_db.get_person.return_value = self._person()
+
+        resp = self.client.get(self.URL)
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertNotIn('aadhaar_number', resp.data)
+        self.assertNotIn('bank_details', resp.data)
+
+    def test_patches_only_the_fields_sent(self, mock_db):
+        self.client.force_authenticate(user=FakeUser(role='admin'))
+        mock_db.get_person.return_value = self._person()
+        mock_db.update_person.return_value = self._person(phone='9000000000')
+
+        resp = self.client.patch(self.URL, {'phone': '9000000000'}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(mock_db.update_person.call_args[0][1], {'phone': '9000000000'})
+
+    def test_editing_needs_the_staff_capability(self, mock_db):
+        mock_db.get_person.return_value = self._person()
+
+        resp = self.client.patch(self.URL, {'phone': '9000000000'}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        mock_db.update_person.assert_not_called()
+
+    def test_validates_the_same_way_as_onboarding(self, mock_db):
+        self.client.force_authenticate(user=FakeUser(role='admin'))
+        mock_db.get_person.return_value = self._person()
+
+        for field, bad in (('phone', '123'), ('aadhaar_number', '99'), ('pan', 'nope')):
+            with self.subTest(field=field):
+                resp = self.client.patch(self.URL, {field: bad}, format='json')
+                self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+                mock_db.update_person.assert_not_called()
+
+    def test_an_empty_patch_is_rejected(self, mock_db):
+        self.client.force_authenticate(user=FakeUser(role='admin'))
+        mock_db.get_person.return_value = self._person()
+
+        resp = self.client.patch(self.URL, {}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_db.update_person.assert_not_called()
+
+    def test_a_start_date_is_stored_as_a_string(self, mock_db):
+        # A validated DateField will not serialise into DynamoDB as-is.
+        self.client.force_authenticate(user=FakeUser(role='admin'))
+        mock_db.get_person.return_value = self._person()
+        mock_db.update_person.return_value = self._person()
+
+        self.client.patch(self.URL, {'start_date': '2026-09-01'}, format='json')
+
+        self.assertEqual(mock_db.update_person.call_args[0][1]['start_date'], '2026-09-01')
 
 
 # =============================================================================

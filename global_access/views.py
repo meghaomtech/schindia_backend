@@ -14,7 +14,7 @@ from dynamo_backend.services import auth_db, global_access_db, roles_db
 from notifications.mailer import send_staff_invite_email
 from .capabilities import has_global_capability
 from .permissions_catalog import CAPABILITY_CATEGORIES
-from .serializers import OnboardStaffSerializer
+from .serializers import OnboardStaffSerializer, UpdateStaffProfileSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -210,12 +210,65 @@ def remove_assignment(request, assignment_pk):
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-@api_view(['DELETE'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated, IsApprovedUser])
-def remove_person(request, person_pk):
-    """Remove a person from Global settings entirely — every role they hold."""
-    global_access_db.remove_person(str(person_pk))
-    return Response(status=status.HTTP_204_NO_CONTENT)
+def person_detail(request, person_pk):
+    """
+    Read, correct or remove one staff record.
+
+    GET returns the record through _visible_person, so identity and bank
+    details reach only a caller entitled to them — the same rule the list
+    endpoint applies.
+
+    Writing requires the capability that creates staff, and identity and bank
+    writes are re-checked separately: someone who cannot read those fields
+    must not be able to overwrite them either, which is what onboarding
+    already enforces on the way in. Deleting is gated the same way — it was
+    previously open to any approved user.
+    """
+    person = global_access_db.get_person(str(person_pk))
+    if not person:
+        return Response({'detail': 'Person not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        return Response(_visible_person(person, request))
+
+    if not has_global_capability(request.user, 'onboard_staff', request=request):
+        return Response(
+            {'detail': 'You do not have permission to manage staff records.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if request.method == 'DELETE':
+        global_access_db.remove_person(str(person_pk))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    serializer = UpdateStaffProfileSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    updates = dict(serializer.validated_data)
+
+    if any(field in updates for field in IDENTITY_FIELDS) and not has_global_capability(
+        request.user, 'staff_identity_documents', request=request
+    ):
+        return Response(
+            {'detail': 'You do not have permission to set identity details.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    if any(field in updates for field in BANK_FIELDS) and not has_global_capability(
+        request.user, 'staff_bank_salary_details', request=request
+    ):
+        return Response(
+            {'detail': 'You do not have permission to set bank details.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    # A DateField validates to a date object, which will not serialise into
+    # DynamoDB on its own.
+    if updates.get('start_date'):
+        updates['start_date'] = updates['start_date'].isoformat()
+
+    updated = global_access_db.update_person(str(person_pk), updates)
+    return Response(_visible_person(updated or {}, request))
 
 
 @api_view(['GET'])

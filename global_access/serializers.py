@@ -101,6 +101,38 @@ class StaffProfileSerializer(serializers.Serializer):
         return value.upper() if value else value
 
 
+class UpdateStaffProfileSerializer(StaffProfileSerializer):
+    """
+    Editing an existing staff record.
+
+    Subclasses the onboarding serializer so the validation rules — Aadhaar
+    shape, PAN shape, IFSC, ten-digit phones — cannot drift between creating a
+    person and correcting them afterwards.
+
+    Every field is optional here. A PATCH fixing one phone number must not
+    demand the name and email back, and the fields it does not mention are
+    left alone rather than cleared. `staff_scope` is dropped because where a
+    person sits follows from their role assignments, not from re-editing the
+    record.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields.pop('staff_scope', None)
+        for field in self.fields.values():
+            field.required = False
+
+    def validate(self, attrs):
+        # Keep only what the caller actually sent. Fields carrying a default —
+        # member_type defaults to 'person' — otherwise appear in validated_data
+        # untouched, and a PATCH fixing a phone number would quietly rewrite an
+        # organisation into a person.
+        sent = {k: v for k, v in attrs.items() if k in (self.initial_data or {})}
+        if not sent:
+            raise serializers.ValidationError('Nothing to update.')
+        return sent
+
+
 class StaffRoleAssignmentSerializer(serializers.Serializer):
     """
     Step 2 — the role, and where it applies.
