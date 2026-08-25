@@ -1,6 +1,7 @@
 """DynamoDB service for Child, Contact, and Enrolment operations."""
 
 import uuid
+from datetime import datetime
 from ..service import DynamoDBService
 from ..tables import CHILDREN_TABLE, CONTACTS_TABLE, ENROLMENTS_TABLE
 
@@ -89,8 +90,18 @@ class ChildrenDynamoService:
         return self.contacts.delete(str(contact_id))
 
     # Enrolment CRUD
-    def list_enrolments(self, child_id):
-        return self.enrolments.query_by_index('child_id-index', 'child_id', str(child_id))
+    def list_enrolments(self, child_id, include_cancelled=False):
+        """
+        A child's enrolments.
+
+        Cancelled ones are held back by default — they are history, not a
+        current booking — but the activity feed asks for them, so a parent can
+        see that a place ended rather than watching it silently vanish.
+        """
+        rows = self.enrolments.query_by_index('child_id-index', 'child_id', str(child_id))
+        if include_cancelled:
+            return rows
+        return [r for r in rows if not r.get('cancelled_at')]
 
     def get_enrolment(self, enrolment_id):
         return self.enrolments.get(str(enrolment_id))
@@ -126,14 +137,30 @@ class ChildrenDynamoService:
         return updated
 
     def delete_enrolment(self, enrolment_id):
-        # Remove child from slot's child_ids before deleting
+        """
+        Cancel an enrolment.
+
+        Marked cancelled rather than erased. The child comes off the slot
+        either way, so capacity frees up immediately — but a booking that
+        simply disappears leaves nobody able to say a place was ever held,
+        which is what "Removed from Tiger" in a child's activity needs.
+
+        `cancelled_at` is its own field rather than reusing end_date: an
+        enrolment reaching its planned end is not a cancellation, and
+        conflating them would report every completed term as a removal.
+        """
         enrolment = self.get_enrolment(enrolment_id)
-        if enrolment:
-            slot_id = enrolment.get('slot_id') or enrolment.get('slot')
-            child_id = enrolment.get('child_id') or enrolment.get('child')
-            if slot_id and child_id:
-                self._remove_child_from_slot(str(slot_id), str(child_id))
-        return self.enrolments.delete(str(enrolment_id))
+        if not enrolment:
+            return None
+
+        slot_id = enrolment.get('slot_id') or enrolment.get('slot')
+        child_id = enrolment.get('child_id') or enrolment.get('child')
+        if slot_id and child_id:
+            self._remove_child_from_slot(str(slot_id), str(child_id))
+
+        return self.enrolments.update(
+            str(enrolment_id), {'cancelled_at': datetime.utcnow().isoformat()}
+        )
 
     def _add_child_to_slot(self, slot_id, child_id):
         """Add child_id to the slot's child_ids list in sessions table."""

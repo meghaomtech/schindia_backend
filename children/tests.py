@@ -499,7 +499,17 @@ class EnrolmentListTests(ChildrenAPITestCase):
         resp = self.client.get(f'/api/v1/children/{CHILD_ID}/enrolments/')
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        mock_children_db.list_enrolments.assert_called_once_with(CHILD_ID)
+        # Cancelled places are history, not a current booking.
+        mock_children_db.list_enrolments.assert_called_once_with(
+            CHILD_ID, include_cancelled=False)
+
+    def test_the_activity_feed_can_ask_for_cancelled_places(self, mock_children_db):
+        mock_children_db.list_enrolments.return_value = []
+
+        self.client.get(f'/api/v1/children/{CHILD_ID}/enrolments/?include_cancelled=1')
+
+        mock_children_db.list_enrolments.assert_called_once_with(
+            CHILD_ID, include_cancelled=True)
 
 
 @patch('children.views.send_enrolment_added_email')

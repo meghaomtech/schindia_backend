@@ -306,7 +306,13 @@ class EnrolmentViewSet(viewsets.ViewSet):
             return centre_not_found()
         if not access.can_view(centre_id, 'children.view_info'):
             return permission_denied()
-        enrolments = children_db.list_enrolments(str(child_pk))
+        # ?include_cancelled=1 for the activity feed, which shows a place
+        # ending as an event. Everything else wants current bookings only.
+        include_cancelled = str(
+            request.query_params.get('include_cancelled', '')
+        ).lower() in ('1', 'true', 'yes')
+        enrolments = children_db.list_enrolments(
+            str(child_pk), include_cancelled=include_cancelled)
         return Response(enrolments)
 
     def create(self, request, *args, **kwargs):

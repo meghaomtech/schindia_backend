@@ -137,3 +137,7 @@ class ChildEnrolmentSerializer(serializers.Serializer):
     day = serializers.CharField(read_only=True)
     start_time = serializers.CharField(read_only=True)
     created_at = serializers.CharField(read_only=True)
+    # Set when the place was given up. Distinct from end_date, which is when
+    # the booking was always going to finish — a completed term is not a
+    # cancellation.
+    cancelled_at = serializers.CharField(read_only=True, required=False)
