@@ -22,10 +22,7 @@ class ClosureDateSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=200)
 
     def validate_date(self, value):
-        if value <= date.today():
-            raise serializers.ValidationError(
-                'Closure date must be a future date.'
-            )
+        # Allow any date (past, present, or future) so closures can be recorded retrospectively.
         return value
 
 

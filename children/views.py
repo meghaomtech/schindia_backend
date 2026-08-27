@@ -115,8 +115,27 @@ class ChildViewSet(viewsets.ViewSet):
 
         child = children_db.create_child(data)
         
-        # Send onboarding email
         centre = centres_db.get_centre(str(child.get('centre_id'))) if child.get('centre_id') else None
+
+        # Auto-enrol in all slots for the assigned session if provided
+        session_id = child.get('session_id')
+        if session_id:
+            slots = sessions_db.list_slots(str(child.get('centre_id')))
+            session_slots = [s for s in slots if s.get('session_id') == session_id]
+            for slot in session_slots:
+                enrolment_data = {
+                    'child_id': child['id'],
+                    'slot_id': slot['id'],
+                    'start_date': child.get('start_date', date.today().isoformat()),
+                    'end_date': slot.get('end_date', '2099-12-31')
+                }
+                enrolment = children_db.create_enrolment(enrolment_data)
+                # Send email for each enrolment (optional, but consistent with Bookings tab)
+                if centre:
+                    c, s, sess, cntr, room = _resolve_enrolment_context(enrolment)
+                    send_enrolment_added_email(c, s, sess, cntr, room=room)
+
+        # Send onboarding email
         if centre:
             send_child_registered_email(child, centre)
 
