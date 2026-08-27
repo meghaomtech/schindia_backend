@@ -198,7 +198,16 @@ class CentreCreateTests(CentresAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("bank_details", resp.data)
 
-    def test_create_rejects_past_closure_date(self, mock_centres_db, mock_roles_db):
+    def test_a_closure_can_be_recorded_after_the_fact(self, mock_centres_db, mock_roles_db):
+        """
+        Closure dates are no longer required to be in the future.
+
+        A centre that shut last week is a fact to record, not a mistake to
+        reject — the previous rule made it impossible to enter one late.
+        """
+        mock_centres_db.create_centre.return_value = {"id": CENTRE_ID}
+        mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "name": "Test Centre"}
+        mock_roles_db.create_role.return_value = {"id": "role-1"}
         payload = {
             **VALID_CENTRE_PAYLOAD,
             "closureDates": [{"date": "2020-01-01", "reason": "Holiday"}],
@@ -206,8 +215,7 @@ class CentreCreateTests(CentresAPITestCase):
 
         resp = self.client.post('/api/v1/centres/', payload, format='json')
 
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("closure_dates", resp.data)
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
 
     def test_create_success_provisions_rooms_and_admin_role(self, mock_centres_db, mock_roles_db):
         mock_centres_db.create_centre.return_value = {"id": CENTRE_ID}
