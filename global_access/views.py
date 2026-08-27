@@ -150,7 +150,38 @@ def global_people(request):
         for r in person.get('roles', []):
             r['permission_count'] = granted_count(r['role_id'])
 
+    # Also fetch centre roles and attach them to the global people based on email
+    all_users = auth_db.get_all_users()
+    users_by_id = {u['id']: u for u in all_users}
+    all_centre_roles = roles_db.roles.list_all()
+    all_centre_members = roles_db.members.list_all()
+    
+    centre_roles_by_email = {}
+    for m in all_centre_members:
+        user_id = m.get('user_id')
+        user = users_by_id.get(user_id)
+        if user:
+            email = user.get('email', '').strip().lower()
+            role = next((r for r in all_centre_roles if r['id'] == m.get('role_id')), None)
+            if role:
+                centre_roles_by_email.setdefault(email, []).append({
+                    'assignment_id': m['id'],
+                    'role_id': role['id'],
+                    'role_name': role.get('name', ''),
+                    'centre_id': role.get('centre_id'),
+                    'include_sub_centres': False,
+                    'permission_count': sum(1 for p in role.get('permissions', []) if p.get('edit') or p.get('visible'))
+                })
+
+    for person in people:
+        email = (person.get('email') or '').strip().lower()
+        if email in centre_roles_by_email:
+            person_roles = person.setdefault('roles', [])
+            person_roles.extend(centre_roles_by_email[email])
+
     role_counts = {r['name']: r.get('member_count', 0) for r in roles.values()}
+    # Also add counts from centre roles to role_counts?
+    # No, the UI expects global roles in role_counts for the sidebar, let's keep it global.
 
     return Response({
         'total': len(people),
@@ -269,6 +300,39 @@ def person_detail(request, person_pk):
         updates['start_date'] = updates['start_date'].isoformat()
 
     updated = global_access_db.update_person(str(person_pk), updates)
+    
+    # Sync name and email downstream to login account and centre roles
+    new_name = updates.get('name')
+    new_email = updates.get('email')
+    if (new_name and new_name != person.get('name')) or (new_email and new_email != person.get('email')):
+        old_email = person.get('email')
+        if old_email:
+            login_user = auth_db.get_user_by_email(old_email)
+            if login_user:
+                user_updates = {}
+                if new_email:
+                    user_updates['email'] = new_email
+                    user_updates['username'] = new_email
+                if new_name:
+                    first, _, last = new_name.partition(' ')
+                    user_updates['first_name'] = first
+                    user_updates['last_name'] = last
+                if user_updates:
+                    auth_db.update_user(login_user['id'], user_updates)
+                
+                # Update denormalized details on centre roles
+                assignments = global_access_db.list_assignments(person_id=str(person_pk))
+                for a in assignments:
+                    role_id = a.get('role_id')
+                    if role_id:
+                        members = roles_db.list_members(role_id)
+                        member = next((m for m in members if m.get('user_id') == login_user['id']), None)
+                        if member:
+                            member_updates = {}
+                            if new_name: member_updates['name'] = new_name
+                            if new_email: member_updates['email'] = new_email
+                            roles_db.members.update(member['id'], member_updates)
+
     return Response(_visible_person(updated or {}, request))
 
 

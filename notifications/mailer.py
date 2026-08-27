@@ -110,9 +110,6 @@ def send_child_registered_email(child, centre):
     )
 
     emails = _parent_contact_emails(child)
-    centre_id = child.get('centre_id') or (centre or {}).get('id')
-    if centre_id:
-        emails |= get_centre_admin_emails(centre_id)
     _send(subject, message, emails)
 
 
