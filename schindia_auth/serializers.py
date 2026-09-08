@@ -7,7 +7,9 @@ class UserSerializer(serializers.Serializer):
 
     def to_representation(self, instance):
         from roles.access import get_user_access
-        from global_access.capabilities import get_global_capabilities, is_unrestricted
+        from global_access.capabilities import (
+            get_global_capabilities, is_global_admin, is_unrestricted,
+        )
         access = get_user_access(instance)
 
         return {
@@ -23,6 +25,11 @@ class UserSerializer(serializers.Serializer):
             # endpoint — this only drives what's worth showing.
             'global_capabilities': sorted(get_global_capabilities(instance)),
             'unrestricted': is_unrestricted(instance),
+            # Global Admin — root or Super Admin — is the only one who may
+            # decide child moves. Narrower than `unrestricted`, which every
+            # approved portal user has; the client uses this to show the
+            # Child moves screen only to people the endpoint will let through.
+            'global_admin': is_global_admin(instance),
             'requested_at': instance.requested_at,
         }
 

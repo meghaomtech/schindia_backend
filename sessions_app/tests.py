@@ -523,22 +523,25 @@ class GenerateSlotsTests(SessionsAPITestCase):
 # timetable
 # =============================================================================
 
+@patch('sessions_app.views.children_db')
 @patch('sessions_app.views.sessions_db')
 @patch('dynamo_backend.services.centres_db')
 class TimetableTests(SessionsAPITestCase):
-    def test_invalid_week_format(self, mock_centres_db, mock_sessions_db):
+    def test_invalid_week_format(self, mock_centres_db, mock_sessions_db, mock_children_db):
         resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/timetable/?week=not-a-date')
 
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_centre_not_found(self, mock_centres_db, mock_sessions_db):
+    def test_centre_not_found(self, mock_centres_db, mock_sessions_db, mock_children_db):
         mock_centres_db.get_centre.return_value = None
 
         resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/timetable/')
 
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_returns_timetable_grouped_by_day(self, mock_centres_db, mock_sessions_db):
+    def test_returns_timetable_grouped_by_day(self, mock_centres_db, mock_sessions_db, mock_children_db):
+        mock_children_db.get_child.return_value = {"id": "child-1", "archived": False}
+        mock_children_db.list_children.return_value = [{"id": "child-1", "archived": False}]
         mock_centres_db.get_centre.return_value = {
             "id": CENTRE_ID, "name": "Centre A", "rooms": [{"id": ROOM_ID, "name": "Sunflower"}],
             "opening_times": {}, "closure_dates": [],
@@ -564,7 +567,7 @@ class TimetableTests(SessionsAPITestCase):
         self.assertEqual(entry["room_name"], "Sunflower")
         self.assertEqual(entry["children_enrolled"], 1)
 
-    def test_filters_by_room(self, mock_centres_db, mock_sessions_db):
+    def test_filters_by_room(self, mock_centres_db, mock_sessions_db, mock_children_db):
         mock_centres_db.get_centre.return_value = {
             "id": CENTRE_ID, "name": "Centre A", "rooms": [], "opening_times": {}, "closure_dates": [],
         }

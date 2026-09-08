@@ -8,6 +8,7 @@ from .roles_service import RolesDynamoService
 from .global_access_service import GlobalAccessDynamoService
 from .catalogue_service import CatalogueDynamoService
 from .otp_service import OtpDynamoService
+from .move_requests_service import MoveRequestsDynamoService
 from .root_access_service import RootAccessDynamoService
 from .blacklist_service import BlacklistDynamoService
 
@@ -22,5 +23,6 @@ roles_db = RolesDynamoService()
 global_access_db = GlobalAccessDynamoService()
 catalogue_db = CatalogueDynamoService()
 otp_db = OtpDynamoService()
+move_requests_db = MoveRequestsDynamoService()
 root_access_db = RootAccessDynamoService()
 blacklist_db = BlacklistDynamoService()

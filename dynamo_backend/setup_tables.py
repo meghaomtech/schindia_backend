@@ -22,6 +22,7 @@ from .tables import (
     CATALOGUE_ITEMS_TABLE, DISCOUNT_RULES_TABLE,
     ATTENDANCE_TABLE, COURSE_PROGRESS_TABLE,
     OTP_TOKENS_TABLE, ROOT_ACCESS_REQUESTS_TABLE, JWT_BLACKLIST_TABLE,
+    CHILD_MOVE_REQUESTS_TABLE,
 )
 
 
@@ -457,6 +458,29 @@ TABLE_DEFINITIONS = [
                 'KeySchema': [{'AttributeName': 'email', 'KeyType': 'HASH'}],
                 'Projection': {'ProjectionType': 'ALL'},
             }
+        ],
+    },
+    {
+        'TableName': CHILD_MOVE_REQUESTS_TABLE,
+        'KeySchema': [{'AttributeName': 'id', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [
+            {'AttributeName': 'id', 'AttributeType': 'S'},
+            {'AttributeName': 'child_id', 'AttributeType': 'S'},
+            {'AttributeName': 'status', 'AttributeType': 'S'},
+        ],
+        'GlobalSecondaryIndexes': [
+            {
+                'IndexName': 'child_id-index',
+                'KeySchema': [{'AttributeName': 'child_id', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            },
+            {
+                # An admin's queue is "everything still pending", which is a
+                # query on status rather than a scan of every request ever made.
+                'IndexName': 'status-index',
+                'KeySchema': [{'AttributeName': 'status', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+            },
         ],
     },
     {

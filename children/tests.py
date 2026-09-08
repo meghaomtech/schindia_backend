@@ -112,7 +112,7 @@ class ChildListTests(ChildrenAPITestCase):
         resp = self.client.get(f'/api/v1/children/?centre={CENTRE_ID}')
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        mock_children_db.list_children.assert_called_once_with(CENTRE_ID)
+        mock_children_db.list_children.assert_called_once_with(CENTRE_ID, archived=False)
 
     def test_list_nested_under_centre(self, mock_children_db):
         mock_children_db.list_children.return_value = [{"id": CHILD_ID}]
@@ -120,7 +120,7 @@ class ChildListTests(ChildrenAPITestCase):
         resp = self.client.get(f'/api/v1/centres/{CENTRE_ID}/children/')
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        mock_children_db.list_children.assert_called_once_with(CENTRE_ID)
+        mock_children_db.list_children.assert_called_once_with(CENTRE_ID, archived=False)
 
 
 # =============================================================================
@@ -806,7 +806,7 @@ class ChildEnforcementTests(ChildrenAPITestCase):
         resp = self.client.get(f'/api/v1/children/?centre={CENTRE_ID}')
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        mock_children_db.list_children.assert_called_once_with(CENTRE_ID)
+        mock_children_db.list_children.assert_called_once_with(CENTRE_ID, archived=False)
 
     @patch('children.views.children_db')
     def test_create_returns_403_when_member_can_view_but_not_add(self, mock_children_db):

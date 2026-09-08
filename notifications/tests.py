@@ -110,7 +110,7 @@ class EnrolmentEmailTests(SimpleTestCase):
         mock_centres_db.get_centre.return_value = {'id': CENTRE_ID, 'manager': None}
         mock_roles_db.list_roles.return_value = []
 
-    def test_added_email_goes_to_parent_and_centre_admins(self, mock_centres_db, mock_roles_db, mock_send_mail):
+    def test_added_email_goes_to_parent_only(self, mock_centres_db, mock_roles_db, mock_send_mail):
         mock_centres_db.get_centre.return_value = {'id': CENTRE_ID, 'manager': {'email': 'manager@example.com'}}
         mock_roles_db.list_roles.return_value = []
         child = child_with_contacts()
@@ -122,7 +122,7 @@ class EnrolmentEmailTests(SimpleTestCase):
         mailer.send_enrolment_added_email(child, slot, session, centre, room=room)
 
         recipients = {c.kwargs['recipient_list'][0] for c in mock_send_mail.call_args_list}
-        self.assertEqual(recipients, {'parent@example.com', 'manager@example.com'})
+        self.assertEqual(recipients, {'parent@example.com'})
         subject = mock_send_mail.call_args_list[0].kwargs['subject']
         self.assertIn('New session scheduled', subject)
         self.assertIn('Kid One', subject)
@@ -192,7 +192,7 @@ class EnrolmentEmailTests(SimpleTestCase):
         # Should not raise despite every send failing.
         mailer.send_enrolment_added_email(child, None, None, {'id': CENTRE_ID, 'name': 'Centre A'})
 
-        self.assertEqual(mock_send_mail.call_count, 2)
+        self.assertEqual(mock_send_mail.call_count, 1)
 
 
 # =============================================================================

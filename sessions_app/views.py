@@ -313,10 +313,22 @@ def slot_attendance(request, centre_pk, slot_pk):
         r['child_id']: r for r in progress_db.list_attendance_by_slot(str(slot_pk), att_date)
     }
 
+    from dynamo_backend.services.children_service import is_archived
+
+    all_children_list = children_db.list_children(str(centre_pk))
+    all_children = {c['id']: c for c in all_children_list}
+
     children = []
     for child_id in slot.get('child_ids', []):
-        child = children_db.get_child(child_id)
+        child = all_children.get(child_id)
         if not child:
+            # Fallback for eventual consistency: if a child was just registered and
+            # enrolled, they might not be in the GSI yet, so fetch by ID directly.
+            child = children_db.get_child(child_id)
+            if child:
+                all_children[child_id] = child
+
+        if not child or is_archived(child):
             continue
         record = records_by_child.get(child_id)
         children.append({
@@ -423,6 +435,9 @@ def _timetable_dynamo(request, centre_id, week_start, week_end):
     all_sessions = {s['id']: s for s in sessions_db.list_sessions(centre_id)}
     # Build room lookup
     rooms = {r['id']: r for r in centre.get('rooms', [])}
+    # Pre-fetch all children for the centre to avoid N+1 queries
+    all_children_list = children_db.list_children(centre_id)
+    all_children = {c['id']: c for c in all_children_list}
 
     days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
     timetable_data = {day: [] for day in days}
@@ -488,7 +503,21 @@ def _timetable_dynamo(request, centre_id, week_start, week_end):
         end_mins = end_minutes % 60
 
         day = DAY_MAP.get(slot_date.weekday(), 'mon')
-        children_count = len(slot.get('child_ids', []))
+        
+        from dynamo_backend.services.children_service import is_archived
+        active_child_ids = []
+        for cid in slot.get('child_ids', []):
+            child_record = all_children.get(cid)
+            if not child_record:
+                # Fallback for eventual consistency of GSI
+                child_record = children_db.get_child(cid)
+                if child_record:
+                    all_children[cid] = child_record
+
+            if child_record and not is_archived(child_record):
+                active_child_ids.append(cid)
+                
+        children_count = len(active_child_ids)
 
         attendance_taken = False
         if children_count:

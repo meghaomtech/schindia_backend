@@ -6,6 +6,17 @@ from ..service import DynamoDBService
 from ..tables import CHILDREN_TABLE, CONTACTS_TABLE, ENROLMENTS_TABLE
 
 
+def is_archived(child):
+    """
+    Whether a child has been archived.
+
+    One reading of the flag, shared by the service and the API, because
+    children stored before archiving existed carry no `archived` attribute at
+    all and must read as active rather than as neither.
+    """
+    return bool((child or {}).get('archived'))
+
+
 class ChildrenDynamoService:
     def __init__(self):
         self.children = DynamoDBService(CHILDREN_TABLE)
@@ -51,18 +62,64 @@ class ChildrenDynamoService:
             child['contacts'] = self.list_contacts(child_id)
         return child
 
-    def list_children(self, centre_id=None):
-        """List children, optionally filtered by centre."""
+    def list_children(self, centre_id=None, archived=None):
+        """
+        List children, optionally filtered by centre.
+
+        `archived` selects on the archive flag: False for the active roll,
+        True for the archive, None (the default) for everything. None stays
+        the default because callers that reach children on their way to
+        something else — invoices, the timetable, reporting — need the whole
+        set; an archived child's invoices do not stop existing.
+        """
         if centre_id:
             children = self.children.query_by_index('centre_id-index', 'centre_id', str(centre_id))
         else:
             children = self.children.list_all()
+        if archived is not None:
+            children = [c for c in children if is_archived(c) is archived]
         for child in children:
             child['contacts'] = self.list_contacts(child['id'])
         return children
 
     def update_child(self, child_id, updates):
         return self.children.update(str(child_id), updates)
+
+    def archive_child(self, child_id, archived_by=''):
+        """
+        Take a child off the active roll without losing anything.
+
+        A soft flag, never a delete: contacts, enrolments, journey entries,
+        notes and invoices all hang off this record, and a centre asked in two
+        years what a family was billed still has to be able to answer.
+        """
+        # Remove from all slots to free up capacity
+        enrolments = self.list_enrolments(child_id, include_cancelled=False)
+        for e in enrolments:
+            slot_id = e.get('slot_id') or e.get('slot')
+            if slot_id:
+                self._remove_child_from_slot(str(slot_id), str(child_id))
+
+        return self.children.update(str(child_id), {
+            'archived': True,
+            'archived_at': datetime.utcnow().isoformat(),
+            'archived_by': archived_by,
+        })
+
+    def unarchive_child(self, child_id):
+        """Put an archived child back on the active roll."""
+        # Restore them to the slots they have active enrolments for
+        enrolments = self.list_enrolments(child_id, include_cancelled=False)
+        for e in enrolments:
+            slot_id = e.get('slot_id') or e.get('slot')
+            if slot_id:
+                self._add_child_to_slot(str(slot_id), str(child_id))
+
+        return self.children.update(str(child_id), {
+            'archived': False,
+            'archived_at': None,
+            'archived_by': None,
+        })
 
     def delete_child(self, child_id):
         # Delete contacts first

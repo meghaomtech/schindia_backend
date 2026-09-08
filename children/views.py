@@ -1,12 +1,19 @@
 from rest_framework import viewsets, status
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import children_db, progress_db, sessions_db, centres_db
+from dynamo_backend.services.children_service import is_archived
 from notifications.mailer import send_enrolment_added_email, send_enrolment_removed_email, send_child_registered_email
 from roles.access import get_user_access, centre_not_found, permission_denied
 from .serializers import ContactSerializer, ChildEnrolmentSerializer
+
+# What ?status= on the children list means. The default is the active roll:
+# an archived child has been taken off it deliberately, and reappearing in
+# every list is exactly what archiving is meant to stop.
+ARCHIVE_FILTERS = {'active': False, 'archived': True, 'all': None}
 
 
 def _resolve_enrolment_context(enrolment):
@@ -38,7 +45,16 @@ class ChildViewSet(viewsets.ViewSet):
             return centre_not_found()
         if not access.can_view(centre_pk, 'children.view_info'):
             return permission_denied()
-        children = children_db.list_children(str(centre_pk))
+
+        wanted = (request.query_params.get('status') or 'active').strip().lower()
+        if wanted not in ARCHIVE_FILTERS:
+            return Response(
+                {'status': [
+                    "Must be one of: " + ', '.join(sorted(ARCHIVE_FILTERS))]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        children = children_db.list_children(
+            str(centre_pk), archived=ARCHIVE_FILTERS[wanted])
         return Response(children)
 
     def retrieve(self, request, *args, **kwargs):
@@ -187,6 +203,70 @@ class ChildViewSet(viewsets.ViewSet):
 
         children_db.delete_child(child_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def _child_for_status_change(self, request, pk):
+        """
+        Fetch a child and check the caller may change its status.
+
+        Returns (child, error_response). The child id comes from the URL and
+        is never trusted on its own — a caller who can see one centre must not
+        be able to archive another centre's child by editing the id.
+        """
+        child = children_db.get_child(str(pk))
+        if not child:
+            return None, Response({'detail': 'Child not found.'},
+                                  status=status.HTTP_404_NOT_FOUND)
+
+        centre_pk = self.kwargs.get('centre_pk')
+        if centre_pk and child.get('centre_id') != str(centre_pk):
+            return None, Response({'detail': 'Child not found.'},
+                                  status=status.HTTP_404_NOT_FOUND)
+
+        centre_id = child.get('centre_id')
+        access = get_user_access(request.user, request)
+        if not access.can_access_centre(centre_id):
+            # Not found rather than forbidden — a 403 would confirm the child
+            # exists at a centre the caller cannot see.
+            return None, centre_not_found('Child not found.')
+        if not access.can_edit(centre_id, 'children.register_status'):
+            return None, permission_denied()
+        return child, None
+
+    @action(detail=True, methods=['post'])
+    def archive(self, request, pk=None, *args, **kwargs):
+        """
+        Take a child off the active roll.
+
+        Nothing is deleted: the record, its contacts, bookings, journey and
+        invoices all stay exactly where they are. Archiving answers "stop
+        showing me this child day to day", not "forget this child ever came".
+        """
+        child, error = self._child_for_status_change(request, pk)
+        if error:
+            return error
+        if is_archived(child):
+            # Already where the caller is asking for it to be. Saying so beats
+            # failing a repeated click, and beats writing a second archive date
+            # over the real one.
+            return Response(child)
+        return Response(children_db.archive_child(
+            str(pk), archived_by=_actor(request)))
+
+    @action(detail=True, methods=['post'])
+    def unarchive(self, request, pk=None, *args, **kwargs):
+        """Put an archived child back on the active roll."""
+        child, error = self._child_for_status_change(request, pk)
+        if error:
+            return error
+        if not is_archived(child):
+            return Response(child)
+        return Response(children_db.unarchive_child(str(pk)))
+
+
+def _actor(request):
+    """Who performed an act, for the audit line on it."""
+    user = request.user
+    return getattr(user, 'email', '') or str(getattr(user, 'id', ''))
 
 
 def _child_centre_id(child_id):
