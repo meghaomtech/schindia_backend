@@ -47,6 +47,12 @@ DISCOUNT_RULES_TABLE = f"{PREFIX}-DiscountRules"
 ATTENDANCE_TABLE = f"{PREFIX}-Attendance"
 COURSE_PROGRESS_TABLE = f"{PREFIX}-CourseProgress"
 OTP_TOKENS_TABLE = f"{PREFIX}-OtpTokens"
+# A centre asking to move one of its children to another centre. Its own
+# table rather than a flag on the child, because the request has to outlive
+# its own outcome: who asked, when, which admin decided and why is the record
+# that a child's centre changed for a reason, and a rejected request has to
+# survive too.
+CHILD_MOVE_REQUESTS_TABLE = f"{PREFIX}-ChildMoveRequests"
 ROOT_ACCESS_REQUESTS_TABLE = f"{PREFIX}-RootAccessRequests"
 JWT_BLACKLIST_TABLE = f"{PREFIX}-JwtBlacklist"
 
@@ -78,6 +84,7 @@ ALL_TABLES = {
     'attendance': ATTENDANCE_TABLE,
     'course_progress': COURSE_PROGRESS_TABLE,
     'otp_tokens': OTP_TOKENS_TABLE,
+    'child_move_requests': CHILD_MOVE_REQUESTS_TABLE,
     'root_access_requests': ROOT_ACCESS_REQUESTS_TABLE,
     'jwt_blacklist': JWT_BLACKLIST_TABLE,
 }

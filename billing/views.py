@@ -1,6 +1,7 @@
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
+from django.http import HttpResponse
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -10,7 +11,12 @@ from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import billing_db, centres_db, children_db
 from roles.access import get_user_access, centre_not_found, permission_denied
 from . import ledger
-from .notifications import send_invoice_email
+from .notifications import (
+    invoice_email_context, invoice_recipients, send_invoice_email,
+)
+from .pdf_generator import (
+    InvoicePdfError, build_invoice_pdf, invoice_pdf_filename,
+)
 from .totals import compute_invoice_total, is_line_itemised
 from .serializers import (
     CancelInvoiceSerializer, CorrectionSerializer, KIND_SERIALIZERS,
@@ -76,6 +82,68 @@ def _with_balance(invoice):
 
 def _with_balances(invoices):
     return [_with_balance(i) for i in invoices]
+
+
+def _actor(request):
+    """Who performed an act, for the audit line on it."""
+    user = request.user
+    return getattr(user, 'email', '') or str(getattr(user, 'id', ''))
+
+
+# How close together two sends have to be to count as the same one. Long
+# enough to absorb an impatient double-click and a retried request; far too
+# short to interfere with genuinely chasing an unpaid invoice next week.
+DUPLICATE_SEND_WINDOW = timedelta(seconds=60)
+
+
+def _recently_sent_to(invoice, recipients):
+    """
+    The delivery record for these same addresses, if one was written within
+    DUPLICATE_SEND_WINDOW. None otherwise.
+
+    Read from the invoice's own `sent_to` trail rather than a separate lock:
+    the trail is what "has this been sent?" means everywhere else, so the
+    guard cannot drift away from the history it is protecting.
+    """
+    wanted = {str(r).lower() for r in recipients}
+    cutoff = datetime.utcnow() - DUPLICATE_SEND_WINDOW
+    newest = None
+    for entry in invoice.get('sent_to') or []:
+        if entry.get('channel') != 'email':
+            continue
+        if str(entry.get('target', '')).lower() not in wanted:
+            continue
+        stamp = entry.get('sent_at')
+        if not stamp:
+            # Written before sends were timestamped; it says nothing about
+            # whether this click is a duplicate of the last one.
+            continue
+        try:
+            when = datetime.fromisoformat(str(stamp))
+        except ValueError:
+            continue
+        if when >= cutoff and (newest is None or when > newest[0]):
+            newest = (when, entry)
+    return newest[1] if newest else None
+
+
+def _record_invoice_sent(invoice_id, result, actor):
+    """
+    Write the delivery to the invoice's history and move it to Sent.
+
+    Called only after the email has actually gone — the status and the trail
+    are the record that it did.
+    """
+    for entry in result.get('results', []):
+        if entry.get('status') == 'sent':
+            billing_db.add_sent_to(invoice_id, 'email', entry['email'], sent_by=actor)
+
+    updates = {'sent_at': datetime.utcnow().isoformat()}
+    # A settled invoice stays settled — being sent a copy does not un-pay it.
+    invoice = billing_db.get_invoice(invoice_id) or {}
+    if str(invoice.get('status', '')).lower() != 'paid':
+        updates['status'] = 'Sent'
+    return billing_db.update_invoice(invoice_id, updates)
 
 
 class InvoiceViewSet(viewsets.ViewSet):
@@ -155,6 +223,12 @@ class InvoiceViewSet(viewsets.ViewSet):
         # needs to know it did not arrive, or a parent is chased for something
         # they were never sent.
         delivery = send_invoice_email(invoice)
+        if delivery.get('sent'):
+            # The same trail Send to Parent writes. An invoice emailed the
+            # moment it was raised is no less sent than one sent on afterwards,
+            # and its history has to say so.
+            invoice = _record_invoice_sent(invoice['id'], delivery, _actor(request)) or invoice
+            invoice['items'] = billing_db.list_invoice_items(invoice['id'])
         payload = dict(invoice)
         payload['email_delivery'] = {
             'sent': delivery.get('sent', False),
@@ -264,11 +338,112 @@ class InvoiceViewSet(viewsets.ViewSet):
 
         for entry in result.get('results', []):
             if entry['status'] == 'sent':
-                billing_db.add_sent_to(str(pk), 'email', entry['email'])
+                billing_db.add_sent_to(str(pk), 'email', entry['email'],
+                                       sent_by=_actor(request))
 
         return Response({
             'detail': 'Invoice email sent.',
             'results': result.get('results', []),
+        })
+
+    @action(detail=True, methods=['get'], url_path='pdf')
+    def pdf(self, request, pk=None):
+        """
+        The invoice as a PDF — the same document that is emailed.
+
+        Read-only on purpose. Previewing a bill must not send it, mark it sent
+        or touch its history, or reception cannot look at an invoice without
+        committing to it.
+        """
+        invoice, _centre_id, error = _load_invoice_for(
+            request, pk, 'finance.view_invoices')
+        if error:
+            return error
+
+        child, centre = invoice_email_context(invoice)
+        try:
+            document = build_invoice_pdf(invoice, centre, child)
+        except InvoicePdfError as exc:
+            return Response(
+                {'detail': 'Could not produce the invoice PDF.', 'error': str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        response = HttpResponse(document, content_type='application/pdf')
+        response['Content-Disposition'] = (
+            f'inline; filename="{invoice_pdf_filename(invoice)}"')
+        return response
+
+    @action(detail=True, methods=['post'], url_path='send-to-parent')
+    def send_to_parent(self, request, pk=None):
+        """
+        Email this invoice to the parent, with the invoice PDF attached.
+
+        The order matters: render, send, and only then record. An invoice
+        marked sent because the button was pressed — rather than because a
+        parent received it — is worse than one never sent, since nobody
+        afterwards knows to try again.
+        """
+        invoice, _centre_id, error = _load_invoice_for(
+            request, pk, 'finance.manage_invoices')
+        if error:
+            return error
+
+        if invoice.get('cancelled_at'):
+            return Response(
+                {'detail': 'This invoice has been cancelled and cannot be sent.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        child, _centre = invoice_email_context(invoice)
+        recipients = invoice_recipients(invoice, child)
+        if not recipients:
+            return Response(
+                {'detail': 'No parent email is on record for this invoice.',
+                 'reason': 'no_contacts'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # A double-click must not put the same bill in a parent's inbox twice,
+        # nor write a second history line saying it was. Deliberate resends
+        # after the window are still allowed — chasing an unpaid invoice is a
+        # normal thing to do.
+        already = _recently_sent_to(invoice, recipients)
+        if already:
+            return Response({
+                'detail': 'This invoice was already sent moments ago.',
+                'duplicate': True,
+                'sent_to': recipients,
+                'sent_at': already.get('sent_at'),
+                'results': [],
+            })
+
+        result = send_invoice_email(invoice)
+
+        if result.get('reason') == 'pdf_failed':
+            logger.error("Invoice %s PDF failed, not sent: %s",
+                         invoice.get('id'), result.get('error'))
+            return Response(
+                {'detail': 'Could not produce the invoice PDF, so nothing was sent.',
+                 'reason': 'pdf_failed', 'error': result.get('error')},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        if not result.get('sent'):
+            errors = [r.get('error') for r in result.get('results', []) if r.get('error')]
+            logger.warning("Invoice %s send failed: %s", invoice.get('id'), errors)
+            return Response(
+                {'detail': 'The invoice could not be emailed.',
+                 'reason': result.get('reason') or 'all_failed', 'errors': errors},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        updated = _record_invoice_sent(str(pk), result, _actor(request))
+        return Response({
+            'detail': 'Invoice sent to parent.',
+            'duplicate': False,
+            'results': result.get('results', []),
+            'sent_to': [r['email'] for r in result['results'] if r['status'] == 'sent'],
+            'invoice': _with_balance(updated),
         })
 
 

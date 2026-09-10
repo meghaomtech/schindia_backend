@@ -23,6 +23,7 @@ CENTRE_ID = "22222222-2222-2222-2222-222222222222"
 INVOICE_ID = "33333333-3333-3333-3333-333333333333"
 PURCHASE_ID = "44444444-4444-4444-4444-444444444444"
 USER_ID = "55555555-5555-5555-5555-555555555555"
+USER_EMAIL = "front.desk@shichida.local"
 
 
 class FakeUser:
@@ -31,6 +32,8 @@ class FakeUser:
     def __init__(self, user_id=USER_ID, status="approved", role="staff"):
         self.id = user_id
         self.pk = user_id
+        # Audit lines name the person, not their uuid — see billing.views._actor.
+        self.email = USER_EMAIL
         self.is_authenticated = True
         self.is_anonymous = False
         self.status = status
@@ -210,7 +213,7 @@ class InvoiceCreateEmailHookTests(BillingAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
 
 
-@patch('billing.notifications.send_mail')
+@patch('billing.notifications.deliver_invoice_email')
 @patch('billing.notifications.children_db')
 @patch('billing.notifications.centres_db')
 @patch('billing.views.billing_db')
@@ -222,7 +225,7 @@ class InvoiceCreateEmailEndToEndTests(BillingAPITestCase):
     """
 
     def test_create_with_linked_child_sends_email_to_parent_contact(
-        self, mock_db, mock_centres_db, mock_children_db, mock_send_mail
+        self, mock_db, mock_centres_db, mock_children_db, mock_deliver
     ):
         mock_db.create_invoice.return_value = {
             "id": INVOICE_ID, "number": "INV-001", "child_id": CHILD_ID,
@@ -237,11 +240,16 @@ class InvoiceCreateEmailEndToEndTests(BillingAPITestCase):
         resp = self.client.post('/api/v1/invoices/', {"childId": CHILD_ID, "totalAmount": 100}, format='json')
 
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
-        mock_send_mail.assert_called_once()
-        self.assertEqual(mock_send_mail.call_args.kwargs['recipient_list'], ['parent@example.com'])
+        mock_deliver.assert_called_once()
+        # deliver_invoice_email(subject, message, recipient, attachment)
+        self.assertEqual(mock_deliver.call_args[0][2], 'parent@example.com')
+        attachment = mock_deliver.call_args[0][3]
+        self.assertEqual(attachment[0], 'Invoice-INV-001.pdf')
+        self.assertTrue(attachment[1].startswith(b'%PDF-'))
+        self.assertEqual(attachment[2], 'application/pdf')
 
     def test_create_without_child_id_sends_no_email(
-        self, mock_db, mock_centres_db, mock_children_db, mock_send_mail
+        self, mock_db, mock_centres_db, mock_children_db, mock_deliver
     ):
         # Reproduces a real bug this was built to catch: an invoice generated from a
         # blank form (no child selected) has no child_id, so there's no parent contact
@@ -251,7 +259,7 @@ class InvoiceCreateEmailEndToEndTests(BillingAPITestCase):
         resp = self.client.post('/api/v1/invoices/', {"totalAmount": 100}, format='json')
 
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
-        mock_send_mail.assert_not_called()
+        mock_deliver.assert_not_called()
         mock_children_db.get_child.assert_not_called()
 
 
@@ -330,7 +338,7 @@ class InvoiceMarkOverdueActionTests(BillingAPITestCase):
         mock_db.update_invoice.assert_called_once_with(INVOICE_ID, {"status": "Overdue"})
 
 
-@patch('billing.notifications.send_mail')
+@patch('billing.notifications.deliver_invoice_email')
 @patch('billing.views.billing_db')
 class InvoiceResendEmailActionTests(BillingAPITestCase):
     """resend_email calls billing.notifications.send_invoice_email, which calls django's send_mail."""
@@ -357,17 +365,17 @@ class InvoiceResendEmailActionTests(BillingAPITestCase):
             "contacts": contacts,
         }
 
-    def test_resend_email_invoice_not_found(self, mock_db, mock_send_mail):
+    def test_resend_email_invoice_not_found(self, mock_db, mock_deliver):
         mock_db.get_invoice.return_value = None
 
         resp = self.client.post(f'/api/v1/invoices/{INVOICE_ID}/resend_email/')
 
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
-        mock_send_mail.assert_not_called()
+        mock_deliver.assert_not_called()
 
     @patch('billing.notifications.children_db')
     @patch('billing.notifications.centres_db')
-    def test_resend_email_no_parent_contacts(self, mock_centres_db, mock_children_db, mock_db, mock_send_mail):
+    def test_resend_email_no_parent_contacts(self, mock_centres_db, mock_children_db, mock_db, mock_deliver):
         mock_db.get_invoice.return_value = self._invoice()
         mock_children_db.get_child.return_value = self._child(with_parent_email=False)
         mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "name": "Centre A"}
@@ -380,11 +388,11 @@ class InvoiceResendEmailActionTests(BillingAPITestCase):
 
     @patch('billing.notifications.children_db')
     @patch('billing.notifications.centres_db')
-    def test_resend_email_all_sends_fail(self, mock_centres_db, mock_children_db, mock_db, mock_send_mail):
+    def test_resend_email_all_sends_fail(self, mock_centres_db, mock_children_db, mock_db, mock_deliver):
         mock_db.get_invoice.return_value = self._invoice()
         mock_children_db.get_child.return_value = self._child()
         mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "name": "Centre A"}
-        mock_send_mail.side_effect = Exception("SMTP down")
+        mock_deliver.side_effect = Exception("SMTP down")
 
         resp = self.client.post(f'/api/v1/invoices/{INVOICE_ID}/resend_email/')
 
@@ -395,7 +403,7 @@ class InvoiceResendEmailActionTests(BillingAPITestCase):
 
     @patch('billing.notifications.children_db')
     @patch('billing.notifications.centres_db')
-    def test_resend_email_success_records_sent_to(self, mock_centres_db, mock_children_db, mock_db, mock_send_mail):
+    def test_resend_email_success_records_sent_to(self, mock_centres_db, mock_children_db, mock_db, mock_deliver):
         mock_db.get_invoice.return_value = self._invoice()
         mock_children_db.get_child.return_value = self._child()
         mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "name": "Centre A"}
@@ -404,7 +412,8 @@ class InvoiceResendEmailActionTests(BillingAPITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data["detail"], "Invoice email sent.")
-        mock_db.add_sent_to.assert_called_once_with(INVOICE_ID, 'email', 'parent@example.com')
+        mock_db.add_sent_to.assert_called_once_with(
+            INVOICE_ID, 'email', 'parent@example.com', sent_by=USER_EMAIL)
 
 
 # =============================================================================

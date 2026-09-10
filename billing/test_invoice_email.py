@@ -63,8 +63,15 @@ class InvoiceRecipientTests(SimpleTestCase):
 
 @patch("billing.notifications.centres_db")
 @patch("billing.notifications.children_db")
-@patch("billing.notifications.send_mail")
+@patch("billing.notifications.deliver_invoice_email")
 class SendInvoiceEmailTests(SimpleTestCase):
+    """
+    Delivery is patched at deliver_invoice_email rather than at send_mail: an
+    invoice now leaves with its PDF attached, which is an EmailMessage rather
+    than a send_mail call. Patching the seam keeps these about *who* the
+    invoice reaches, which is what they were always testing.
+    """
+
     def _invoice(self, **over):
         base = {'id': 'inv-1', 'number': 'BA260001', 'centre_id': CENTRE_ID,
                 'child_id': None, 'email': 'payer@example.com',
@@ -81,7 +88,7 @@ class SendInvoiceEmailTests(SimpleTestCase):
         result = send_invoice_email(self._invoice())
 
         self.assertTrue(result['sent'])
-        self.assertEqual(mail.call_args.kwargs['recipient_list'], ['payer@example.com'])
+        self.assertEqual(mail.call_args[0][2], 'payer@example.com')
 
     def test_names_the_student_when_there_is_no_child_record(self, mail, kids, centres):
         from billing.notifications import send_invoice_email
@@ -90,7 +97,7 @@ class SendInvoiceEmailTests(SimpleTestCase):
 
         send_invoice_email(self._invoice())
 
-        self.assertIn('Walk-in', mail.call_args.kwargs['subject'])
+        self.assertIn('Walk-in', mail.call_args[0][0])
 
     def test_reports_when_there_is_nobody_to_send_to(self, mail, kids, centres):
         from billing.notifications import send_invoice_email

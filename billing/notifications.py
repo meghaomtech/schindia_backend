@@ -4,9 +4,11 @@ Invoice and session email notifications (Req 23, 25).
 import logging
 from datetime import datetime
 
-from django.core.mail import send_mail
+from django.core.mail import EmailMessage, send_mail
 
 from dynamo_backend.services import children_db, centres_db, auth_db
+
+from .pdf_generator import InvoicePdfError, build_invoice_pdf, invoice_pdf_filename
 
 logger = logging.getLogger(__name__)
 
@@ -36,14 +38,108 @@ def invoice_recipients(invoice, child):
     return [billed_to] if billed_to else []
 
 
-def send_invoice_email(invoice):
+def deliver_invoice_email(subject, message, recipient, attachment=None):
     """
-    Send the invoice to whoever is billed for it (Req 23.1-3).
-    `invoice` is a dict as returned by billing_db.get_invoice().
-    Returns {'sent': bool, 'reason': str|None, 'results': [...]}.
+    One invoice email to one address.
+
+    The single place a message actually leaves this module, so the PDF is
+    attached the same way whether the invoice was just raised or is being sent
+    on afterwards. Raises on failure; the caller records the outcome per
+    recipient so one bad address cannot swallow the rest.
+
+    `attachment` is (filename, content, mimetype) or None.
     """
+    if attachment is None:
+        send_mail(subject=subject, message=message, from_email=None,
+                  recipient_list=[recipient], fail_silently=False)
+        return
+
+    email = EmailMessage(subject=subject, body=message, to=[recipient])
+    email.attach(*attachment)
+    email.send(fail_silently=False)
+
+
+def _bank_details_text(centre):
+    bank_details = (centre or {}).get('bank_details') or {}
+    if not bank_details:
+        return ""
+    text = "\n\nPayment Details:\n"
+    for label, key in (
+        ('Account Holder', 'account_holder_name'),
+        ('Bank', 'bank_name'),
+        ('Account Number', 'account_number'),
+        ('IFSC Code', 'ifsc_code'),
+        ('UPI ID', 'upi_id'),
+    ):
+        if bank_details.get(key):
+            text += f"  {label}: {bank_details[key]}\n"
+    return text
+
+
+def _invoice_email_content(invoice, child, centre, attached_filename=None):
+    """
+    Subject and body for an invoice email.
+
+    Names the invoice, the child, the centre, the amount and the due date, so
+    a parent can identify the bill from the message alone — the attachment is
+    the document, not the only place the essentials appear.
+    """
+    centre_name = (centre.get('name', '') if centre else '') or invoice.get('center_code', '')
+    billed_for = (
+        f"{child.get('first_name', '')} {child.get('last_name', '')}".strip() if child else ''
+    ) or invoice.get('student_name', '')
+
+    try:
+        due_date_display = datetime.strptime(
+            invoice.get('due_date', ''), '%Y-%m-%d').strftime('%d %B %Y')
+    except (ValueError, TypeError):
+        due_date_display = invoice.get('due_date', '')
+
+    subject = f"Invoice for {billed_for} — {centre_name}"
+    attachment_line = (
+        f"\nYour invoice is attached as {attached_filename}.\n"
+        if attached_filename else ""
+    )
+    message = (
+        f"Dear Parent/Guardian,\n\n"
+        f"An invoice has been generated for {billed_for} "
+        f"at {centre_name}.\n\n"
+        f"Invoice Number: {invoice.get('number', '')}\n"
+        f"Total Amount: ₹{invoice.get('total_amount', 0)}\n"
+        f"Due Date: {due_date_display}\n"
+        f"{attachment_line}"
+        f"{_bank_details_text(centre)}\n"
+        f"Please ensure payment is made by the due date.\n\n"
+        f"Best regards,\n"
+        f"{centre_name}"
+    )
+    return subject, message
+
+
+def invoice_email_context(invoice):
+    """The child and centre an invoice belongs to, for rendering and addressing."""
     child_id = invoice.get('child_id') or invoice.get('child')
     child = children_db.get_child(str(child_id)) if child_id else None
+    # The centre comes from the child where there is one, and from the invoice's
+    # own stamp otherwise — a childless invoice still belongs to a centre.
+    centre_id = (child or {}).get('centre_id') or invoice.get('centre_id')
+    centre = centres_db.get_centre(str(centre_id)) if centre_id else None
+    return child, centre
+
+
+def send_invoice_email(invoice, attach_pdf=True):
+    """
+    Send the invoice to whoever is billed for it (Req 23.1-3), with the
+    invoice PDF attached.
+
+    `invoice` is a dict as returned by billing_db.get_invoice().
+    Returns {'sent': bool, 'reason': str|None, 'results': [...]}.
+
+    A PDF that will not render is reported rather than papered over: sending
+    the covering note without the document it describes leaves a parent with a
+    demand for money and nothing to check it against.
+    """
+    child, centre = invoice_email_context(invoice)
 
     recipients = invoice_recipients(invoice, child)
     if not recipients:
@@ -53,69 +149,31 @@ def send_invoice_email(invoice):
         )
         return {'sent': False, 'reason': 'no_contacts', 'results': []}
 
-    # The centre comes from the child where there is one, and from the invoice's
-    # own stamp otherwise — a childless invoice still belongs to a centre.
-    centre_id = (child or {}).get('centre_id') or invoice.get('centre_id')
-    centre = centres_db.get_centre(str(centre_id)) if centre_id else None
-    centre_name = (centre.get('name', '') if centre else '') or invoice.get('center_code', '')
+    attachment = None
+    filename = None
+    if attach_pdf:
+        try:
+            filename = invoice_pdf_filename(invoice)
+            attachment = (filename, build_invoice_pdf(invoice, centre, child),
+                          'application/pdf')
+        except InvoicePdfError as exc:
+            return {'sent': False, 'reason': 'pdf_failed', 'error': str(exc),
+                    'results': []}
 
-    billed_for = (
-        f"{child.get('first_name', '')} {child.get('last_name', '')}".strip() if child else ''
-    ) or invoice.get('student_name', '')
-
-    subject = f"Invoice for {billed_for} — {centre_name}"
-
-    # Build bank details text
-    bank_text = ""
-    bank_details = (centre or {}).get('bank_details') or {}
-    if bank_details:
-        bank_text = "\n\nPayment Details:\n"
-        if bank_details.get('account_holder_name'):
-            bank_text += f"  Account Holder: {bank_details['account_holder_name']}\n"
-        if bank_details.get('bank_name'):
-            bank_text += f"  Bank: {bank_details['bank_name']}\n"
-        if bank_details.get('account_number'):
-            bank_text += f"  Account Number: {bank_details['account_number']}\n"
-        if bank_details.get('ifsc_code'):
-            bank_text += f"  IFSC Code: {bank_details['ifsc_code']}\n"
-        if bank_details.get('upi_id'):
-            bank_text += f"  UPI ID: {bank_details['upi_id']}\n"
-
-    try:
-        due_date_display = datetime.strptime(invoice.get('due_date', ''), '%Y-%m-%d').strftime('%d %B %Y')
-    except (ValueError, TypeError):
-        due_date_display = invoice.get('due_date', '')
-
-    message = (
-        f"Dear Parent/Guardian,\n\n"
-        f"An invoice has been generated for {billed_for} "
-        f"at {centre_name}.\n\n"
-        f"Invoice Number: {invoice.get('number', '')}\n"
-        f"Total Amount: ₹{invoice.get('total_amount', 0)}\n"
-        f"Due Date: {due_date_display}\n"
-        f"{bank_text}\n"
-        f"Please ensure payment is made by the due date.\n\n"
-        f"Best regards,\n"
-        f"{centre_name}"
-    )
+    subject, message = _invoice_email_content(invoice, child, centre, filename)
 
     results = []
     for email in recipients:
         try:
-            send_mail(
-                subject=subject,
-                message=message,
-                from_email=None,
-                recipient_list=[email],
-                fail_silently=False,
-            )
+            deliver_invoice_email(subject, message, email, attachment)
             results.append({'email': email, 'status': 'sent', 'error': None})
         except Exception as e:
             logger.warning(f"Failed to send invoice email to {email}: {e}")
             results.append({'email': email, 'status': 'failed', 'error': str(e)})
 
     any_sent = any(r['status'] == 'sent' for r in results)
-    return {'sent': any_sent, 'reason': None if any_sent else 'all_failed', 'results': results}
+    return {'sent': any_sent, 'reason': None if any_sent else 'all_failed',
+            'results': results}
 
 
 def _should_skip_notification(email, notification_type):

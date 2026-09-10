@@ -87,11 +87,26 @@ class BillingDynamoService:
             self.invoice_items.delete(item['id'])
         return self.invoices.delete(str(invoice_id))
 
-    def add_sent_to(self, invoice_id, channel, target):
-        """Record that an invoice was sent via a channel (email/sms). Embedded on the invoice."""
+    def add_sent_to(self, invoice_id, channel, target, sent_by='', sent_at=None):
+        """
+        Record that an invoice was sent via a channel (email/sms). Embedded on
+        the invoice, so an invoice and its delivery history cannot be separated.
+
+        Each entry carries when it went and who sent it: "sent to this address"
+        with no date answers none of the questions a parent chasing a bill
+        actually asks. Written only after the send succeeds — see
+        InvoiceViewSet.send_to_parent.
+        """
+        from datetime import datetime
         invoice = self.invoices.get(str(invoice_id))
         sent_to = (invoice or {}).get('sent_to') or []
-        sent_to.append({'channel': channel, 'target': target})
+        stamp = sent_at or datetime.utcnow().isoformat()
+        sent_to.append({
+            'channel': channel,
+            'target': target,
+            'sent_at': stamp,
+            'sent_by': sent_by,
+        })
         return self.invoices.update(str(invoice_id), {'sent_to': sent_to})
 
     def list_invoice_items(self, invoice_id):
