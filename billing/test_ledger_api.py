@@ -37,7 +37,7 @@ def access_allowing(*keys):
 def invoice(cancelled_at=None):
     return {
         'id': INVOICE_ID, 'centre_id': CENTRE_ID, 'child_id': None,
-        'total': '1000', 'due_date': '2026-09-01', 'cancelled_at': cancelled_at,
+        'total': '1000', 'due_date': '2099-09-01', 'cancelled_at': cancelled_at,
     }
 
 
